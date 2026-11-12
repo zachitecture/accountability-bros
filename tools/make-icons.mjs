@@ -27,6 +27,24 @@ function barbell(angle, strokes = GOLD, bar = WHITE) {
     </g>`;
 }
 
+// A more adjustable version of the gentle-tilt barbell, for trying refinements.
+//   strokes: [centre x, top y, bottom y, lean in degrees] for each tally stroke
+//   plates:  [distance from centre to the plate's inner edge, width, height]
+function tallyBar({ angle = -12, width = 34, strokes, barHalf = 160, barHeight = 26, plates }) {
+  const marks = strokes.map(([x, top, bottom, lean = 0]) =>
+    `<path d="M${x} ${top}V${bottom}" transform="rotate(${lean} ${x} 256)"/>`).join('');
+  const ends = plates.map(([inner, w, h]) => `
+      <rect x="${256 - inner - w}" y="${256 - h / 2}" width="${w}" height="${h}" rx="${Math.min(w, h) / 2.8}"/>
+      <rect x="${256 + inner}" y="${256 - h / 2}" width="${w}" height="${h}" rx="${Math.min(w, h) / 2.8}"/>`).join('');
+  return `
+    <g stroke="${GOLD}" stroke-width="${width}" stroke-linecap="round" fill="none">${marks}</g>
+    <g transform="rotate(${angle} 256 256)" stroke="${NAVY}" stroke-width="12" stroke-linejoin="round" paint-order="stroke" fill="${WHITE}">
+      <rect x="${256 - barHalf}" y="${256 - barHeight / 2}" width="${barHalf * 2}" height="${barHeight}" rx="${barHeight / 3}"/>${ends}
+    </g>`;
+}
+const EVEN = [[178, 150, 362], [230, 150, 362], [282, 150, 362], [334, 150, 362]];
+const WIDE = [[172, 136, 376], [228, 136, 376], [284, 136, 376], [340, 136, 376]];
+
 // Each logo is drawn on a 512 x 512 canvas and kept inside the middle 80%,
 // so Android can crop it to a circle without cutting anything off.
 export const LOGOS = {
@@ -43,6 +61,14 @@ export const LOGOS = {
   barbell: barbell(-23),
   gentle: barbell(-12),
   level: barbell(0),
+  // Refinements of the gentle tilt.
+  bold: tallyBar({ width: 40, strokes: WIDE, barHalf: 164, barHeight: 32, plates: [[126, 32, 120], [164, 28, 80]] }),
+  clean: tallyBar({ strokes: EVEN, barHalf: 186, plates: [[118, 32, 116]] }),
+  handdrawn: tallyBar({
+    strokes: [[178, 156, 366, -4], [230, 146, 358, 3], [282, 152, 370, -2], [334, 144, 360, 4]],
+    plates: [[132, 28, 104], [166, 24, 70]],
+  }),
+  boldclean: tallyBar({ width: 40, strokes: WIDE, barHalf: 190, barHeight: 32, plates: [[124, 38, 128]] }),
   // Same idea with the colours swapped: white strokes, gold barbell.
   goldbar: barbell(-12, WHITE, GOLD),
   // A level barbell whose four plates are the tally strokes: short, tall, tall, short.
