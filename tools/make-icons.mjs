@@ -1,6 +1,6 @@
 // Draws the home-screen icons into public/. Run with: node tools/make-icons.mjs
-// Pass a logo name to switch: node tools/make-icons.mjs tally | seal | dumbbell
-// Pass "sheet <file.png>" to draw all the options side by side for comparison.
+// Pass a logo name to switch, e.g.: node tools/make-icons.mjs barbell
+// Pass "sheet <file.png> [names...]" to draw options side by side for comparison.
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,37 +24,71 @@ export const LOGOS = {
       </g>
       <path d="M100 322L412 190" stroke="${WHITE}" stroke-width="40"/>
     </g>`,
+  // Tally with a barbell as the strike: bar plus two plates at each end.
+  barbell: `
+    <g stroke="${GOLD}" stroke-width="34" stroke-linecap="round" fill="none">
+      <path d="M178 150v212"/><path d="M230 150v212"/><path d="M282 150v212"/><path d="M334 150v212"/>
+    </g>
+    <g transform="rotate(-23 256 256)" stroke="${NAVY}" stroke-width="12" stroke-linejoin="round" paint-order="stroke">
+      <rect x="96" y="243" width="320" height="26" rx="8" fill="${WHITE}"/>
+      <rect x="96" y="204" width="28" height="104" rx="10" fill="${WHITE}"/>
+      <rect x="388" y="204" width="28" height="104" rx="10" fill="${WHITE}"/>
+      <rect x="66" y="221" width="24" height="70" rx="9" fill="${WHITE}"/>
+      <rect x="422" y="221" width="24" height="70" rx="9" fill="${WHITE}"/>
+    </g>`,
+  // Tally with a chunky dumbbell as the strike: one heavy head at each end.
+  dumbbell: `
+    <g stroke="${GOLD}" stroke-width="34" stroke-linecap="round" fill="none">
+      <path d="M178 150v212"/><path d="M230 150v212"/><path d="M282 150v212"/><path d="M334 150v212"/>
+    </g>
+    <g transform="rotate(-23 256 256)" stroke="${NAVY}" stroke-width="12" stroke-linejoin="round" paint-order="stroke">
+      <rect x="110" y="242" width="292" height="28" rx="8" fill="${WHITE}"/>
+      <rect x="70" y="210" width="58" height="92" rx="20" fill="${WHITE}"/>
+      <rect x="384" y="210" width="58" height="92" rx="20" fill="${WHITE}"/>
+    </g>`,
+  // Tally with a heartbeat as the strike.
+  pulse: `
+    <g stroke="${GOLD}" stroke-width="36" stroke-linecap="round" fill="none">
+      <path d="M163 146v220"/><path d="M225 146v220"/><path d="M287 146v220"/><path d="M349 146v220"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" transform="rotate(-8 256 256)">
+      <path d="M84 262H156L196 172L254 352L312 222L336 262H428" stroke="${NAVY}" stroke-width="46"/>
+      <path d="M84 262H156L196 172L254 352L312 222L336 262H428" stroke="${WHITE}" stroke-width="26"/>
+    </g>`,
+  // Each tally stroke is an upright dumbbell, with a plain strike.
+  uprights: `
+    <g fill="${GOLD}">
+      ${[160, 224, 288, 352].map((x) => `
+        <rect x="${x - 11}" y="160" width="22" height="192" rx="8"/>
+        <rect x="${x - 25}" y="142" width="50" height="46" rx="14"/>
+        <rect x="${x - 25}" y="324" width="50" height="46" rx="14"/>`).join('')}
+    </g>
+    <g fill="none" stroke-linecap="round">
+      <path d="M96 320L416 192" stroke="${NAVY}" stroke-width="54"/>
+      <path d="M96 320L416 192" stroke="${WHITE}" stroke-width="32"/>
+    </g>`,
   // A stamp of approval: ring and tick.
   seal: `
     <g fill="none" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="256" cy="256" r="150" stroke="${GOLD}" stroke-width="36"/>
       <path d="M186 262l50 52 94-112" stroke="${WHITE}" stroke-width="44"/>
     </g>`,
-  // A dumbbell on the tilt.
-  dumbbell: `
-    <g transform="rotate(-35 256 256)">
-      <rect x="170" y="238" width="172" height="36" rx="12" fill="${WHITE}"/>
-      <rect x="128" y="172" width="50" height="168" rx="16" fill="${GOLD}"/>
-      <rect x="334" y="172" width="50" height="168" rx="16" fill="${GOLD}"/>
-      <rect x="88" y="204" width="34" height="104" rx="14" fill="${GOLD}"/>
-      <rect x="390" y="204" width="34" height="104" rx="14" fill="${GOLD}"/>
-    </g>`,
 };
 
 const svg = (name, size, radius = 0) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 512 512">
   <rect width="512" height="512" rx="${radius}" fill="${NAVY}"/>${LOGOS[name]}</svg>`;
 
-const [mode = 'tally', outFile] = process.argv.slice(2);
+const [mode = 'tally', outFile, ...pick] = process.argv.slice(2);
 const browser = await chromium.launch();
 
 if (mode === 'sheet') {
-  const names = Object.keys(LOGOS);
+  const names = pick.length ? pick : Object.keys(LOGOS);
   const page = await browser.newPage({ viewport: { width: 80 + names.length * 300, height: 440 }, deviceScaleFactor: 2 });
   await page.setContent(`<body style="margin:0;background:#20242c;font-family:sans-serif;color:#fff">
     <div style="display:flex;gap:60px;padding:50px 70px;align-items:flex-start">
       ${names.map((n, i) => `<div style="text-align:center">
         ${svg(n, 240, 112)}
-        <div style="margin-top:16px;font-size:20px;font-weight:700">${'ABC'[i]}. ${n[0].toUpperCase()}${n.slice(1)}</div>
+        <div style="margin-top:16px;font-size:20px;font-weight:700">${i + 1}. ${n[0].toUpperCase()}${n.slice(1)}</div>
         <div style="margin-top:14px;display:flex;gap:10px;justify-content:center;align-items:center">${svg(n, 60, 112)}<span style="font-size:13px;color:#aab">home screen size</span></div>
       </div>`).join('')}
     </div></body>`);
