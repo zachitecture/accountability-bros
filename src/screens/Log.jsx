@@ -168,7 +168,9 @@ export default function Log({ state }) {
           <div className="sub">
             {state.locked
               ? 'This week locked on Monday night with nothing declared. You can set next week\'s goals now.'
-              : 'Declare what you are aiming for this week, then come back here to log it.'}
+              : state.grace
+                ? 'You joined part-way through the week. You have 24 hours from joining to set this week\'s goals, then you can log them here.'
+                : 'Declare what you are aiming for this week, then come back here to log it.'}
           </div>
         </div>
         <a className="btn primary" href="#/goals">{state.locked ? 'Set next week\'s goals' : 'Declare this week'}</a>

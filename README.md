@@ -24,6 +24,7 @@ These live in `supabase/schema.sql`, not in the app, so they cannot be bypassed 
 
 - Time comes from the server. A member's week and Monday lock follow their own time zone.
 - Goals for a week lock when Monday ends. After that only an admin can change another member's goals.
+- Someone who joins after the Monday lock has 24 hours to set goals for that first week. An admin can switch this off in More > Rules.
 - A week under the minimum number of goals needs a written reason.
 - Each log needs a photo in the member's own folder. A photo cannot be reused.
 - A Physical session at or under the minimum minutes is flagged. A second log of the same goal on the same day is flagged. Flags are shown to the group; people decide what to do about them.

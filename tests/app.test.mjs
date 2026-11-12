@@ -280,6 +280,7 @@ try {
   await page.getByLabel('Office (shown under the name)').fill('Leader of the Opposition');
   await page.getByRole('button', { name: 'Save Sauce' }).click();
   await page.getByText('Leader of the Opposition').waitFor();
+  assert.equal(await page.getByLabel('New members can set goals for the week they join').isChecked(), true);
   ok('admin can edit a member');
 
   // Still signed in after a reload, then sign out and back in.
@@ -312,7 +313,17 @@ try {
   await p2.getByLabel('Join code').fill(code);
   await p2.getByRole('button', { name: 'Join', exact: true }).click();
   await p2.getByText('No goals declared this week').waitFor();
-  await p2.getByText('This week locked on Monday night').waitFor();
+  // Joined on Tuesday, after the lock: gets 24 hours to set this first week.
+  await p2.getByText('You joined part-way through the week').waitFor();
+  await p2.getByRole('link', { name: 'Declare this week' }).click();
+  await p2.getByText('You joined mid-week, so you can set this week\'s goals until Wed 11 Nov, 6:14 pm').waitFor();
+  await p2.getByRole('button', { name: 'Gym', exact: true }).click();
+  for (let i = 0; i < 2; i += 1) await p2.getByRole('button', { name: 'One more Gym' }).click();
+  await p2.getByRole('button', { name: 'Save 3 goals' }).click();
+  await p2.getByText('Saved.').waitFor();
+  await shot(p2, 'mid-week-joiner-goals');
+  await p2.getByRole('link', { name: 'Log' }).click();
+  await p2.getByText('0 of 3 done').waitFor();
   await p2.getByRole('link', { name: 'Kitty' }).click();
   await p2.getByRole('heading', { name: 'The Kitty' }).waitFor();
   await p2.getByText('Forfeits and fees').waitFor();

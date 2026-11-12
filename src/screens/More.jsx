@@ -118,6 +118,7 @@ function Rules({ refresh }) {
       const s = await rpc('update_settings', { p_patch: {
         group_name: f.group_name, min_goals: Number(f.min_goals), min_physical_minutes: Number(f.min_physical_minutes),
         forfeit_per_member: Number(f.forfeit_per_member), forfeit_due_days: Number(f.forfeit_due_days), join_code: f.join_code,
+        first_week_grace: Boolean(f.first_week_grace),
       } });
       load.setData(s);
       setSaved(true);
@@ -138,6 +139,10 @@ function Rules({ refresh }) {
       <div className="field"><label className="label" htmlFor="r-mins">Physical sessions must be over (minutes)</label><input id="r-mins" className="input" inputMode="numeric" value={f.min_physical_minutes} onChange={set('min_physical_minutes')} /></div>
       <div className="field"><label className="label" htmlFor="r-forfeit">Forfeit per Eligible Member ($)</label><input id="r-forfeit" className="input" inputMode="decimal" value={f.forfeit_per_member} onChange={set('forfeit_per_member')} /></div>
       <div className="field"><label className="label" htmlFor="r-days">Days to pay</label><input id="r-days" className="input" inputMode="numeric" value={f.forfeit_due_days} onChange={set('forfeit_due_days')} /></div>
+      <label className="check">
+        <input type="checkbox" checked={Boolean(f.first_week_grace)} onChange={(e) => { setF({ ...f, first_week_grace: e.target.checked }); setSaved(false); }} />
+        New members can set goals for the week they join (for 24 hours after joining)
+      </label>
       <div className="field"><label className="label" htmlFor="r-name">Group name (printed on the stamp)</label><input id="r-name" className="input" maxLength={40} value={f.group_name} onChange={set('group_name')} /></div>
       <ErrorNote>{error}</ErrorNote>
       {saved ? <div className="notice good" role="status">Rules saved.</div> : null}

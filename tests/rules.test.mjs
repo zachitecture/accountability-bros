@@ -280,6 +280,34 @@ await test('a paused member is locked out and leaves the group list', async () =
   await call(khov, 'update_member', { p_user: rad, p_patch: { active: true } });
 });
 
+await test('joining mid-week: 24 hours to set goals for that first week', async () => {
+  await setNow('2026-11-18T02:00:00Z'); // Wed 18 Nov, 1 pm in Melbourne
+  const late = await newUser('late@example.com');
+  const s = await call(late, 'join_group', { p_code: 'NEWCODE1', p_nickname: 'Late', p_timezone: 'Australia/Melbourne' });
+  assert.equal(s.locked, false);
+  assert.equal(s.grace, true);
+  assert.equal(new Date(s.edit_until).toISOString(), '2026-11-19T02:00:00.000Z');
+  const w = await call(late, 'save_goals', { p_week: '2026-11-16', p_goals: [{ activity: 'Gym', category: 'physical', target: 3 }] });
+  assert.equal(w.editable, true);
+  await call(late, 'log_activity', { p_goal_id: w.goals[0].id, p_duration: 40, p_photo_path: `${late}/a.jpg` });
+  // Members who were already in before the lock get no such window.
+  assert.equal((await call(khov, 'get_state')).locked, true);
+  await fails(call(khov, 'save_goals', { p_week: '2026-11-16', p_goals: [{ activity: 'Walk', category: 'physical', target: 3 }] }), /locked on Monday/);
+  // A week they joined part-way through is not treated as a missed week.
+  await setNow('2026-11-19T03:30:00Z');
+  assert.equal((await call(late, 'get_state')).locked, true);
+  await fails(call(late, 'save_goals', { p_week: '2026-11-16', p_goals: [{ activity: 'Gym', category: 'physical', target: 4 }] }), /locked on Monday/);
+  // The Executive can switch the window off.
+  const later = await newUser('later@example.com');
+  await call(khov, 'update_settings', { p_patch: { first_week_grace: false } });
+  const s2 = await call(later, 'join_group', { p_code: 'NEWCODE1', p_nickname: 'Later', p_timezone: 'Australia/Melbourne' });
+  assert.equal(s2.locked, true);
+  await fails(call(later, 'save_goals', { p_week: '2026-11-16', p_goals: [{ activity: 'Gym', category: 'physical', target: 3 }] }), /locked on Monday/);
+  await call(khov, 'update_settings', { p_patch: { first_week_grace: true } });
+  await setNow('2026-11-23T02:00:00Z');
+  assert.equal((await call(khov, 'get_kitty')).misses.some((m) => m.nickname === 'Late' || m.nickname === 'Later'), false);
+});
+
 await test('photo storage: own folder only, members only', async () => {
   await asUser(khov, `insert into storage.objects (bucket_id, name) values ('proof', '${khov}/z.jpg')`);
   await fails(asUser(khov, `insert into storage.objects (bucket_id, name) values ('proof', '${rad}/z.jpg')`), /row-level security/);
@@ -291,7 +319,7 @@ await test('photo storage: own folder only, members only', async () => {
 await test('schema.sql can be run a second time without harm', async () => {
   const { readFileSync } = await import('node:fs');
   await db.exec(readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8'));
-  assert.equal((await call(khov, 'get_group')).members.length, 4);
+  assert.equal((await call(khov, 'get_group')).members.length, 6);
   await fails(call(khov, 'streak', { p_user: khov }), /permission denied/);
 });
 

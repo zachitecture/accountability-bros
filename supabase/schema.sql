@@ -21,6 +21,8 @@ create table if not exists public.settings (
   join_code text not null default upper(substr(md5(random()::text || clock_timestamp()::text), 1, 8))
 );
 insert into public.settings (id) values (1) on conflict (id) do nothing;
+-- Lets someone who joins after the Monday lock still set goals for that first week.
+alter table public.settings add column if not exists first_week_grace boolean not null default true;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
@@ -183,6 +185,29 @@ begin
   return n;
 end $$;
 
+-- Until when a member may change their goals for a week, or null if they may not.
+--   * next week: until its own Monday lock
+--   * this week: until the Monday lock; or, if they joined after that lock and the
+--     first-week setting is on, for 24 hours after joining
+create or replace function public.edit_until(p_user uuid, p_week date) returns timestamptz
+language plpgsql stable security definer set search_path = public as $$
+declare
+  p public.profiles; v_cur date; v_lock timestamptz; v_grace timestamptz;
+begin
+  select * into p from public.profiles where id = p_user;
+  if p.id is null or p_week is null then return null; end if;
+  v_cur := public.week_of(p.timezone);
+  v_lock := public.lock_at(p_week, p.timezone);
+  if p_week = v_cur + 7 then return v_lock; end if;
+  if p_week <> v_cur then return null; end if;
+  if public.app_now() < v_lock then return v_lock; end if;
+  if (select first_week_grace from public.settings where id = 1) and p.joined_at >= v_lock then
+    v_grace := p.joined_at + interval '24 hours';
+    if public.app_now() < v_grace then return v_grace; end if;
+  end if;
+  return null;
+end $$;
+
 -- ------------------------------------------------------- joining & state ---
 
 create or replace function public.get_state() returns jsonb
@@ -190,7 +215,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   v_uid uuid := auth.uid();
   p public.profiles; s public.settings;
-  v_week date; v_lock timestamptz; v_now timestamptz := public.app_now();
+  v_week date; v_lock timestamptz; v_until timestamptz; v_now timestamptz := public.app_now();
 begin
   if v_uid is null then raise exception 'Please sign in first.'; end if;
   select * into p from public.profiles where id = v_uid;
@@ -203,6 +228,7 @@ begin
   select * into s from public.settings where id = 1;
   v_week := public.week_of(p.timezone);
   v_lock := public.lock_at(v_week, p.timezone);
+  v_until := public.edit_until(p.id, v_week);
   return jsonb_build_object(
     'member', true,
     'me', jsonb_build_object('id', p.id, 'nickname', p.nickname, 'title', p.title, 'timezone', p.timezone,
@@ -210,7 +236,9 @@ begin
     'settings', jsonb_build_object('group_name', s.group_name, 'min_goals', s.min_goals,
       'min_physical_minutes', s.min_physical_minutes, 'forfeit_per_member', s.forfeit_per_member,
       'forfeit_due_days', s.forfeit_due_days),
-    'now', v_now, 'week_start', v_week, 'lock_at', v_lock, 'locked', v_now >= v_lock);
+    'now', v_now, 'week_start', v_week, 'lock_at', v_lock,
+    -- "locked" means this member can no longer change this week's goals.
+    'locked', v_until is null, 'edit_until', v_until, 'grace', v_until is not null and v_now >= v_lock);
 end $$;
 
 -- The very first person to join needs no code and becomes the admin.
@@ -295,12 +323,12 @@ begin
   return jsonb_build_object(
     'user_id', t.id, 'nickname', t.nickname, 'title', t.title, 'timezone', t.timezone,
     'week_start', v_week, 'current_week', v_cur, 'lock_at', v_lock,
-    'editable', (v_week = v_cur and public.app_now() < v_lock) or v_week = v_cur + 7,
+    'editable', public.edit_until(t.id, v_week) is not null, 'edit_until', public.edit_until(t.id, v_week),
     'goals', v_goals, 'reason', v_reason, 'history', v_hist);
 end $$;
 
 -- Replace a member's goals for a week. Members can do this for the current week
--- until the Monday lock, and for next week at any time. The Executive (admins)
+-- until the Monday lock (or for 24 hours after joining mid-week), and for next week at any time. The Executive (admins)
 -- can change another member's goals after the lock, for agreed substitutions.
 create or replace function public.save_goals(p_week date, p_goals jsonb, p_reason text default null, p_user uuid default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -325,12 +353,11 @@ begin
   if p_week is null or extract(isodow from p_week) <> 1 then raise exception 'Weeks start on a Monday.'; end if;
   v_cur := public.week_of(t.timezone);
   if not v_override then
-    if p_week = v_cur then
-      if public.app_now() >= public.lock_at(v_cur, t.timezone) then
-        raise exception 'This week''s goals locked on Monday at 11:59 pm.';
-      end if;
-    elsif p_week <> v_cur + 7 then
+    if p_week <> v_cur and p_week <> v_cur + 7 then
       raise exception 'You can only set goals for this week or next week.';
+    end if;
+    if public.edit_until(t.id, p_week) is null then
+      raise exception 'This week''s goals locked on Monday at 11:59 pm.';
     end if;
   end if;
 
@@ -740,6 +767,7 @@ begin
   if p_patch ? 'min_physical_minutes' then s.min_physical_minutes := (p_patch->>'min_physical_minutes')::int; end if;
   if p_patch ? 'forfeit_per_member' then s.forfeit_per_member := (p_patch->>'forfeit_per_member')::numeric; end if;
   if p_patch ? 'forfeit_due_days' then s.forfeit_due_days := (p_patch->>'forfeit_due_days')::int; end if;
+  if p_patch ? 'first_week_grace' then s.first_week_grace := coalesce((p_patch->>'first_week_grace')::boolean, s.first_week_grace); end if;
   if p_patch ? 'join_code' then
     v_code := upper(btrim(coalesce(p_patch->>'join_code', '')));
     if length(v_code) < 6 or length(v_code) > 24 then raise exception 'The join code needs 6 to 24 characters.'; end if;
@@ -751,7 +779,7 @@ begin
   if s.forfeit_due_days < 0 or s.forfeit_due_days > 90 then raise exception 'Days to pay must be between 0 and 90.'; end if;
   update public.settings set group_name = s.group_name, min_goals = s.min_goals,
     min_physical_minutes = s.min_physical_minutes, forfeit_per_member = s.forfeit_per_member,
-    forfeit_due_days = s.forfeit_due_days, join_code = s.join_code
+    forfeit_due_days = s.forfeit_due_days, join_code = s.join_code, first_week_grace = s.first_week_grace
   where id = 1;
   return to_jsonb(s);
 end $$;
@@ -767,7 +795,7 @@ declare
   api text[] := array['get_state', 'join_group', 'update_my_profile', 'get_week', 'save_goals', 'log_activity',
     'undo_log', 'get_group', 'get_member', 'get_kitty', 'issue_forfeit', 'excuse_week', 'add_entry', 'set_paid',
     'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member'];
-  internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak'];
+  internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until'];
 begin
   for r in
     select p.oid::regprocedure as sig, p.proname

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { rpc } from '../api.js';
-import { CATEGORY_LABEL, addDays, fmtDate, plural } from '../format.js';
+import { CATEGORY_LABEL, addDays, fmtDate, fmtDayTime, plural } from '../format.js';
 import { ErrorNote, Head, Icon, Loading, useLoad } from '../ui.jsx';
 
 const QUICK = [
@@ -114,9 +114,12 @@ export default function Goals({ state, userId, week: fixedWeek }) {
     }
   }
 
-  const lockText = week === state.week_start
-    ? (state.locked ? 'Locked since Monday 11:59 pm' : 'Locks Monday at 11:59 pm')
-    : `Locks ${fmtDate(week)} at 11:59 pm`;
+  let lockText = `Locks ${fmtDate(week)} at 11:59 pm`;
+  if (week === state.week_start) {
+    if (state.locked) lockText = 'Locked since Monday 11:59 pm';
+    else if (state.grace) lockText = `You joined mid-week, so you can set this week's goals until ${fmtDayTime(state.edit_until, state.me.timezone)}`;
+    else lockText = 'Locks Monday at 11:59 pm';
+  }
 
   return (
     <main className="screen">
