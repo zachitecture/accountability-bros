@@ -13,6 +13,20 @@ const NAVY = '#0B1430';
 const GOLD = '#F2C230';
 const WHITE = '#F3F5FB';
 
+function barbell(angle, strokes = GOLD, bar = WHITE) {
+  return `
+    <g stroke="${strokes}" stroke-width="34" stroke-linecap="round" fill="none">
+      <path d="M178 150v212"/><path d="M230 150v212"/><path d="M282 150v212"/><path d="M334 150v212"/>
+    </g>
+    <g transform="rotate(${angle} 256 256)" stroke="${NAVY}" stroke-width="12" stroke-linejoin="round" paint-order="stroke" fill="${bar}">
+      <rect x="96" y="243" width="320" height="26" rx="8"/>
+      <rect x="96" y="204" width="28" height="104" rx="10"/>
+      <rect x="388" y="204" width="28" height="104" rx="10"/>
+      <rect x="66" y="221" width="24" height="70" rx="9"/>
+      <rect x="422" y="221" width="24" height="70" rx="9"/>
+    </g>`;
+}
+
 // Each logo is drawn on a 512 x 512 canvas and kept inside the middle 80%,
 // so Android can crop it to a circle without cutting anything off.
 export const LOGOS = {
@@ -25,17 +39,21 @@ export const LOGOS = {
       <path d="M100 322L412 190" stroke="${WHITE}" stroke-width="40"/>
     </g>`,
   // Tally with a barbell as the strike: bar plus two plates at each end.
-  barbell: `
-    <g stroke="${GOLD}" stroke-width="34" stroke-linecap="round" fill="none">
-      <path d="M178 150v212"/><path d="M230 150v212"/><path d="M282 150v212"/><path d="M334 150v212"/>
+  // Variants differ in how steeply the barbell sits.
+  barbell: barbell(-23),
+  gentle: barbell(-12),
+  level: barbell(0),
+  // Same idea with the colours swapped: white strokes, gold barbell.
+  goldbar: barbell(-12, WHITE, GOLD),
+  // A level barbell whose four plates are the tally strokes: short, tall, tall, short.
+  plates: `
+    <g fill="${GOLD}">
+      <rect x="128" y="181" width="40" height="150" rx="16"/>
+      <rect x="200" y="144" width="40" height="224" rx="16"/>
+      <rect x="272" y="144" width="40" height="224" rx="16"/>
+      <rect x="344" y="181" width="40" height="150" rx="16"/>
     </g>
-    <g transform="rotate(-23 256 256)" stroke="${NAVY}" stroke-width="12" stroke-linejoin="round" paint-order="stroke">
-      <rect x="96" y="243" width="320" height="26" rx="8" fill="${WHITE}"/>
-      <rect x="96" y="204" width="28" height="104" rx="10" fill="${WHITE}"/>
-      <rect x="388" y="204" width="28" height="104" rx="10" fill="${WHITE}"/>
-      <rect x="66" y="221" width="24" height="70" rx="9" fill="${WHITE}"/>
-      <rect x="422" y="221" width="24" height="70" rx="9" fill="${WHITE}"/>
-    </g>`,
+    <rect x="72" y="242" width="368" height="28" rx="10" fill="${WHITE}" stroke="${NAVY}" stroke-width="12" paint-order="stroke"/>`,
   // Tally with a chunky dumbbell as the strike: one heavy head at each end.
   dumbbell: `
     <g stroke="${GOLD}" stroke-width="34" stroke-linecap="round" fill="none">
