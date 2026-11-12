@@ -4,3 +4,4 @@ dist
 .env.*.local
 tests/out
 .DS_Store
+.wrangler
