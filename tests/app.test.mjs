@@ -121,6 +121,19 @@ try {
   });
   const photoPath = join(out, 'test-photo.jpg');
   writeFileSync(photoPath, Buffer.from(dataUrl.split(',')[1], 'base64'));
+  const selfieUrl = await scratch.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 900; c.height = 1200;
+    const x = c.getContext('2d');
+    x.fillStyle = '#8a6f5c'; x.fillRect(0, 0, 900, 1200);
+    x.fillStyle = '#e8c9a8'; x.beginPath(); x.arc(450, 520, 250, 0, Math.PI * 2); x.fill();
+    x.fillStyle = '#2b2b2b'; x.beginPath(); x.arc(360, 470, 26, 0, Math.PI * 2); x.arc(540, 470, 26, 0, Math.PI * 2); x.fill();
+    x.lineWidth = 22; x.strokeStyle = '#2b2b2b'; x.lineCap = 'round'; x.beginPath(); x.arc(450, 560, 110, 0.15 * Math.PI, 0.85 * Math.PI); x.stroke();
+    x.fillStyle = '#fff'; x.font = 'bold 70px sans-serif'; x.textAlign = 'center'; x.fillText('TEST SELFIE', 450, 1020);
+    return c.toDataURL('image/jpeg', 0.9);
+  });
+  const selfiePath = join(out, 'test-selfie.jpg');
+  writeFileSync(selfiePath, Buffer.from(selfieUrl.split(',')[1], 'base64'));
   await scratch.context().close();
 
   // ---- Khov creates the first account and sets up the group
@@ -191,13 +204,15 @@ try {
   await page.getByRole('heading', { name: 'Log activity' }).waitFor();
   await page.getByText('2 / 7').waitFor();
   await page.getByRole('button', { name: /Stamp it/ }).click();
-  await page.getByText('Enter how many minutes it took.').waitFor();
-  await page.getByLabel('How long?').fill('52');
+  await page.getByText('Enter how long it took.').waitFor();
+  await page.getByLabel('Minutes').fill('52');
   await page.getByText('Over the 25 minute minimum for Physical').waitFor();
   await page.getByRole('button', { name: /Stamp it/ }).click();
   await page.getByText('Add a proof photo first.').waitFor();
-  await page.setInputFiles('input[type=file]', photoPath);
+  await page.setInputFiles('input[aria-label="Take a proof photo"]', photoPath);
   await page.getByText('Photo added').waitFor();
+  await page.setInputFiles('input[aria-label="Take a selfie"]', selfiePath);
+  await page.getByText('Selfie added').waitFor();
   await shot(page, 'log');
   await page.getByRole('button', { name: /Stamp it/ }).click();
   await page.getByRole('heading', { name: 'Your stamp' }).waitFor();
@@ -220,9 +235,10 @@ try {
 
   // A short second gym session the same day gets both flags.
   await page.getByRole('button', { name: 'Log another' }).click();
-  await page.getByLabel('How long?').fill('20');
+  await page.getByLabel('Hours').fill('0');
+  await page.getByLabel('Minutes').fill('20');
   await page.getByText('Not over the 25 minute minimum').waitFor();
-  await page.setInputFiles('input[type=file]', photoPath);
+  await page.setInputFiles('input[aria-label="Take a proof photo"]', photoPath);
   await page.getByText('Photo added').waitFor();
   await page.getByRole('button', { name: /Stamp it/ }).click();
   await page.getByText('is not over the 25 minute minimum').waitFor();
@@ -232,6 +248,24 @@ try {
   await page.getByRole('heading', { name: 'Log activity' }).waitFor();
   await page.getByText('3 / 7').waitFor();
   ok('a short repeat is flagged, and undo removes it');
+
+  // Hours and minutes: 1:30 is stored as 90 minutes and shown as "1 h 30 min".
+  await page.getByRole('button', { name: /^Run/ }).click();
+  await page.getByLabel('Hours').fill('01');
+  await page.getByLabel('Minutes').fill('30');
+  await page.getByText('1 h 30 min', { exact: true }).waitFor();
+  await page.setInputFiles('input[aria-label="Take a proof photo"]', photoPath);
+  await page.getByText('Photo added').waitFor();
+  await page.getByRole('button', { name: /Stamp it/ }).click();
+  await page.getByRole('heading', { name: 'Your stamp' }).waitFor();
+  assert.match(await page.locator('img.stamp-img').getAttribute('alt'), /Run, 1 h 30 min, 4 of 7/);
+  const longest = (await fake.db.query(`select max(duration_min) as m from public.logs where user_id = ${lit(khov)} and week_start = '2026-11-09'`)).rows[0].m;
+  assert.equal(longest, 90);
+  await shot(page, 'stamp-hours');
+  await page.getByRole('button', { name: /Undo this entry/ }).click();
+  await page.getByRole('heading', { name: 'Log activity' }).waitFor();
+  await page.getByText('3 / 7').waitFor();
+  ok('hours and minutes: 01:30 logs 90 minutes');
 
   // ---- the group and a member's record
   await page.getByRole('link', { name: 'Group' }).click();

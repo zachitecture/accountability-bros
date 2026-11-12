@@ -43,6 +43,15 @@ export function money(n) {
   return Number.isInteger(v) ? `$${v}` : `$${v.toFixed(2)}`;
 }
 
+// 52 -> "52 min", 60 -> "1 h", 90 -> "1 h 30 min"
+export function fmtDuration(minutes) {
+  const m = Math.max(0, Math.round(Number(minutes) || 0));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r === 0 ? `${h} h` : `${h} h ${r} min`;
+}
+
 export const CATEGORY_LABEL = { physical: 'Physical', lifestyle: 'Lifestyle', recovery: 'Recovery' };
 
 export function plural(n, word) {

@@ -1,5 +1,5 @@
 // Photo handling: shrink what the camera gives us, and draw the stamped image.
-import { fmtStamp } from './format.js';
+import { fmtDuration, fmtStamp } from './format.js';
 
 const NAVY = '#0B1430';
 const GOLD = '#F2C230';
@@ -66,9 +66,16 @@ function pill(ctx, text, x, y, { bg, fg, font, padX = 20, height = 52, alignRigh
   return w;
 }
 
+function roundedPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
 // Build the image that goes to the chat: the photo with a band underneath
 // carrying who, what, how long, when (server time) and the tally.
-export async function makeStamp(photoBlob, log) {
+// An optional selfie is inset over the top-left of the photo.
+export async function makeStamp(photoBlob, log, selfieBlob = null) {
   const W = 1080;
   const H = 1350;
   const BAND = 310;
@@ -89,6 +96,19 @@ export async function makeStamp(photoBlob, log) {
   ctx.fillStyle = NAVY;
   ctx.fillRect(0, 0, W, H);
   drawCover(ctx, img, 0, 0, W, photoH);
+
+  if (selfieBlob) {
+    const selfie = await loadImage(selfieBlob);
+    const x = 40; const y = 112; const w = 300; const h = 400; const r = 34; const edge = 8;
+    roundedPath(ctx, x - edge, y - edge, w + edge * 2, h + edge * 2, r + edge);
+    ctx.fillStyle = NAVY;
+    ctx.fill();
+    ctx.save();
+    roundedPath(ctx, x, y, w, h, r);
+    ctx.clip();
+    drawCover(ctx, selfie, x, y, w, h);
+    ctx.restore();
+  }
 
   // Group name, top left. Any flags, top right.
   if ('letterSpacing' in ctx) ctx.letterSpacing = '3px';
@@ -125,9 +145,14 @@ export async function makeStamp(photoBlob, log) {
   ctx.fillText(fitText(ctx, `${log.nickname} · ${log.activity}`.toUpperCase(), leftMax), 52, photoH + 84);
   if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
-  ctx.font = '700 96px "Space Grotesk", "Inter", system-ui, sans-serif';
+  const duration = fmtDuration(log.duration_min);
+  let size = 96;
+  do {
+    ctx.font = `700 ${size}px "Space Grotesk", "Inter", system-ui, sans-serif`;
+    size -= 4;
+  } while (ctx.measureText(duration).width > leftMax && size > 48);
   ctx.fillStyle = TEXT;
-  ctx.fillText(`${log.duration_min} min`, 52, photoH + 190);
+  ctx.fillText(duration, 52, photoH + 190);
 
   ctx.font = '500 34px "Inter", system-ui, sans-serif';
   ctx.fillStyle = MUTED;

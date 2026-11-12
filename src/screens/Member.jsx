@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { rpc } from '../api.js';
-import { addDays, fmtDate, fmtDayTime, plural } from '../format.js';
+import { addDays, fmtDate, fmtDayTime, fmtDuration, plural } from '../format.js';
 import { ErrorNote, Head, Icon, Loading, ProofThumb, useLoad } from '../ui.jsx';
 
 export default function Member({ state, userId }) {
@@ -74,7 +74,7 @@ export default function Member({ state, userId }) {
               <div key={l.id} className="card row" style={{ padding: 12, alignItems: 'flex-start' }}>
                 <ProofThumb path={l.photo_path} label={`${d.nickname}, ${l.activity}, ${fmtDayTime(l.logged_at, d.timezone)}`} />
                 <div className="stack grow" style={{ gap: 4 }}>
-                  <div className="name" style={{ fontSize: 15 }}>{l.activity} · {l.duration_min} min</div>
+                  <div className="name" style={{ fontSize: 15 }}>{l.activity} · {fmtDuration(l.duration_min)}</div>
                   <div className="sub">{fmtDayTime(l.logged_at, d.timezone)}</div>
                   <div className="row wrap" style={{ gap: 6 }}>
                     {l.flag_short ? <span className="badge flag">Under {state.settings.min_physical_minutes} min</span> : null}

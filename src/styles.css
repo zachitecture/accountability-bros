@@ -118,6 +118,11 @@ h1, h2, p { margin: 0; }
 .textarea { padding: 12px 14px; min-height: 88px; resize: vertical; line-height: 1.45; }
 .input::placeholder, .textarea::placeholder { color: var(--muted); }
 .input.num { width: 104px; min-height: 56px; font-family: var(--display); font-size: 26px; font-weight: 700; }
+.input.num.time { width: 84px; text-align: center; padding: 0 8px; }
+.time-colon { font-family: var(--display); font-size: 28px; font-weight: 700; line-height: 56px; color: var(--text-2); }
+.time-total { font-size: 16px; line-height: 56px; margin-left: 6px; white-space: nowrap; }
+fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset.plain legend { padding: 0; margin-bottom: 8px; }
 .check { display: flex; align-items: center; gap: 12px; min-height: 44px; font-size: 15px; }
 .check input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); flex-shrink: 0; }
 

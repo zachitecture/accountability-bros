@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { rpc, uploadProof } from '../api.js';
 import { compressPhoto, makeStamp } from '../image.js';
-import { fmtDate, fmtDayTime } from '../format.js';
+import { fmtDate, fmtDayTime, fmtDuration } from '../format.js';
 import { ErrorNote, Head, Icon, Loading, Tick, useLoad } from '../ui.jsx';
 
 function canShareFiles() {
@@ -20,12 +20,16 @@ function slug(s) {
 export default function Log({ state }) {
   const week = useLoad(() => rpc('get_week'), []);
   const [goalId, setGoalId] = useState(null);
+  const [hours, setHours] = useState('');
   const [minutes, setMinutes] = useState('');
   const [photo, setPhoto] = useState(null); // { blob, url }
+  const [selfie, setSelfie] = useState(null); // { blob, url }, optional
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null); // { log, blob, url, fileName }
   const fileRef = useRef(null);
+  const selfieRef = useRef(null);
+  const minutesRef = useRef(null);
   const shareable = useMemo(canShareFiles, []);
 
   const goals = week.data?.goals || [];
@@ -34,10 +38,12 @@ export default function Log({ state }) {
   const open = goals.filter((g) => g.done < g.target);
   const selected = open.find((g) => g.id === goalId) || open[0] || null;
   const minMinutes = state.settings.min_physical_minutes;
-  const mins = Number(minutes);
-  const short = selected && selected.category === 'physical' && minutes !== '' && mins <= minMinutes;
+  const entered = hours !== '' || minutes !== '';
+  const mins = Number(hours || 0) * 60 + Number(minutes || 0);
+  const short = selected && selected.category === 'physical' && entered && mins <= minMinutes;
 
   useEffect(() => () => { if (photo) URL.revokeObjectURL(photo.url); }, [photo]);
+  useEffect(() => () => { if (selfie) URL.revokeObjectURL(selfie.url); }, [selfie]);
 
   async function pickPhoto(e) {
     const file = e.target.files && e.target.files[0];
@@ -55,10 +61,27 @@ export default function Log({ state }) {
     }
   }
 
+  async function pickSelfie(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    setError('');
+    setBusy('Preparing selfie…');
+    try {
+      const blob = await compressPhoto(file, 900);
+      setSelfie({ blob, url: URL.createObjectURL(blob) });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function stampIt() {
     setError('');
     if (!selected) return;
-    if (!Number.isInteger(mins) || mins < 1) { setError('Enter how many minutes it took.'); return; }
+    if (!Number.isInteger(mins) || mins < 1) { setError('Enter how long it took.'); return; }
+    if (mins > 1440) { setError('That is more than a day. Check the hours and minutes.'); return; }
     if (!photo) { setError('Add a proof photo first.'); return; }
     try {
       setBusy('Uploading photo…');
@@ -66,7 +89,7 @@ export default function Log({ state }) {
       setBusy('Logging…');
       const log = await rpc('log_activity', { p_goal_id: selected.id, p_duration: mins, p_photo_path: path });
       setBusy('Stamping…');
-      const blob = await makeStamp(photo.blob, log);
+      const blob = await makeStamp(photo.blob, log, selfie ? selfie.blob : null);
       setResult({ log, blob, url: URL.createObjectURL(blob), fileName: `${slug(log.nickname)}-${slug(log.activity)}-${log.done}-of-${log.total}.jpg` });
       window.scrollTo(0, 0);
     } catch (err) {
@@ -99,6 +122,8 @@ export default function Log({ state }) {
     if (result) URL.revokeObjectURL(result.url);
     setResult(null);
     setPhoto(null);
+    setSelfie(null);
+    setHours('');
     setMinutes('');
     setGoalId(null);
     setError('');
@@ -125,13 +150,13 @@ export default function Log({ state }) {
     return (
       <main className="screen">
         <Head eyebrow={left === 0 ? 'Week complete' : `${left} to go this week`} title="Your stamp" side={<div className="big-num">{log.done} / {log.total}</div>} />
-        <img className="stamp-img" src={result.url} alt={`${log.nickname}, ${log.activity}, ${log.duration_min} minutes, ${log.done} of ${log.total}`} />
+        <img className="stamp-img" src={result.url} alt={`${log.nickname}, ${log.activity}, ${fmtDuration(log.duration_min)}, ${log.done} of ${log.total}`} />
         <div className="stack">
           <Tick>Saved to your record</Tick>
           <Tick>Time set by the app: {fmtDayTime(log.logged_at, log.timezone)}</Tick>
           {log.flag_short
-            ? <Tick warn>{log.duration_min} minutes is not over the {log.min_physical_minutes} minute minimum, so it is flagged for the group</Tick>
-            : log.category === 'physical' ? <Tick>{log.duration_min} minutes, over the {log.min_physical_minutes} minute minimum</Tick> : null}
+            ? <Tick warn>{fmtDuration(log.duration_min)} is not over the {log.min_physical_minutes} minute minimum, so it is flagged for the group</Tick>
+            : log.category === 'physical' ? <Tick>{fmtDuration(log.duration_min)}, over the {log.min_physical_minutes} minute minimum</Tick> : null}
           {log.flag_same_day ? <Tick warn>Second {log.activity} logged today, so it is flagged for the group</Tick> : null}
         </div>
         <ErrorNote>{error}</ErrorNote>
@@ -215,19 +240,32 @@ export default function Log({ state }) {
         })}
       </div>
 
-      <div className="stack">
-        <label className="label" htmlFor="minutes">How long?</label>
-        <div className="row">
-          <input id="minutes" className="input num" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={4} value={minutes}
-            onChange={(e) => setMinutes(e.target.value.replace(/[^0-9]/g, ''))} />
-          <span className="soft" style={{ fontSize: 16 }}>minutes</span>
+      <fieldset className="stack plain">
+        <legend className="label">How long?</legend>
+        <div className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
+          <div className="stack center" style={{ gap: 4 }}>
+            <input id="hours" aria-label="Hours" className="input num time" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={2} placeholder="0" value={hours}
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^0-9]/g, '');
+                setHours(v);
+                if (v.length === 2 && minutesRef.current) minutesRef.current.focus();
+              }} />
+            <span className="tiny muted">hours</span>
+          </div>
+          <span className="time-colon" aria-hidden="true">:</span>
+          <div className="stack center" style={{ gap: 4 }}>
+            <input id="minutes" ref={minutesRef} aria-label="Minutes" className="input num time" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={3} placeholder="00" value={minutes}
+              onChange={(e) => setMinutes(e.target.value.replace(/[^0-9]/g, ''))} />
+            <span className="tiny muted">minutes</span>
+          </div>
+          {entered && mins > 0 ? <span className="soft time-total">{fmtDuration(mins)}</span> : null}
         </div>
-        {selected.category === 'physical' && minutes !== '' ? (
+        {selected.category === 'physical' && entered ? (
           short
             ? <div className="row small warn" style={{ gap: 8 }}><Icon name="flag" size={16} color="var(--warn)" />Not over the {minMinutes} minute minimum. It will be flagged.</div>
             : <div className="row small gold" style={{ gap: 8 }}><Icon name="check" size={16} color="var(--accent)" width={2.6} />Over the {minMinutes} minute minimum for Physical</div>
         ) : null}
-      </div>
+      </fieldset>
 
       <div className="stack">
         <div className="label">Proof photo</div>
@@ -245,6 +283,26 @@ export default function Log({ state }) {
           <button type="button" className="btn dashed" style={{ minHeight: 72 }} onClick={() => fileRef.current.click()}>
             <Icon name="camera" size={22} width={1.800} />
             Take photo
+          </button>
+        )}
+      </div>
+
+      <div className="stack">
+        <div className="label">Selfie (optional)</div>
+        <input ref={selfieRef} className="sr" type="file" accept="image/*" capture="user" onChange={pickSelfie} aria-label="Take a selfie" tabIndex={-1} />
+        {selfie ? (
+          <div className="card photo-pick" style={{ padding: 12 }}>
+            <img className="thumb" src={selfie.url} alt="Your selfie" />
+            <div className="stack grow" style={{ gap: 3 }}>
+              <span className="name" style={{ fontSize: 15 }}>Selfie added</span>
+              <span className="sub">It sits in the corner of your stamp.</span>
+            </div>
+            <button type="button" className="btn small-btn" onClick={() => setSelfie(null)}>Remove</button>
+          </div>
+        ) : (
+          <button type="button" className="btn dashed" onClick={() => selfieRef.current.click()}>
+            <Icon name="plus" size={16} width={2.6} />
+            Add a selfie to the stamp
           </button>
         )}
       </div>
