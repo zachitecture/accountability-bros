@@ -13,7 +13,17 @@
   --accent: #2F5233;
   --accent-hover: #3C6741;
   --accent-ink: #FFFFFF;
-  --warn: #C0401C;
+  --warn: #C0401C; /* orange is only for something wrong: money owed, flagged sessions */
+  --bar: #B7C6B0;
+  --you-bg: var(--accent);
+  --you-ink: var(--accent-ink);
+  /* The stamped image that goes to the chat (read by src/image.js). */
+  --stamp-band: #1F3326;
+  --stamp-text: #F6F5F0;
+  --stamp-text-2: #CBD5C7;
+  --stamp-muted: #A5B2A1;
+  --stamp-pop: #F6F5F0;
+  --stamp-flag: #C9431F;
   --display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --tabbar: 64px;
@@ -138,7 +148,7 @@ fieldset.plain legend { padding: 0; margin-bottom: 8px; }
 .notice.error { border-color: var(--warn); color: var(--text); }
 .notice.good { border-color: var(--accent); color: var(--text); }
 .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-.badge.you { background: var(--accent); color: var(--accent-ink); }
+.badge.you { background: var(--you-bg); color: var(--you-ink); }
 .badge.flag { background: var(--warn); color: var(--accent-ink); }
 .badge.quiet { border: 1px solid var(--line-strong); color: var(--text-2); }
 
@@ -156,7 +166,7 @@ fieldset.plain legend { padding: 0; margin-bottom: 8px; }
 .stepper .count { width: 34px; text-align: center; font-family: var(--display); font-size: 22px; font-weight: 700; }
 .bars { display: flex; align-items: flex-end; gap: 8px; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); }
-.bar { width: 20px; border-radius: 5px; background: #B7C6B0; min-height: 3px; }
+.bar { width: 20px; border-radius: 5px; background: var(--bar); min-height: 3px; }
 .bar.now { background: var(--accent); }
 .bar-col.now { color: var(--accent); font-weight: 700; }
 .total-num { font-family: var(--display); font-size: 28px; font-weight: 700; line-height: 1; color: var(--accent); }

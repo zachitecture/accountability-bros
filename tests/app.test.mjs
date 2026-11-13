@@ -2,7 +2,7 @@
 // Run with: npm run test:app   (screenshots land in tests/out)
 import assert from 'node:assert/strict';
 import { execSync, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +42,14 @@ let step = 0;
 async function newPage() {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: SCALE, timezoneId: 'Australia/Melbourne', locale: 'en-AU' });
   const page = await ctx.newPage();
+  // THEME_CSS=<file> previews a different palette without changing the app.
+  if (process.env.THEME_CSS) {
+    const css = readFileSync(process.env.THEME_CSS, 'utf8');
+    await ctx.addInitScript((text) => {
+      const add = () => { const el = document.createElement('style'); el.textContent = text; document.head.appendChild(el); };
+      if (document.head) add(); else document.addEventListener('DOMContentLoaded', add);
+    }, css);
+  }
   page.on('console', (m) => { if (m.type() === 'error' && !/status of 40[0-9]/.test(m.text())) problems.push(`console: ${m.text()}`); });
   page.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
   page.on('dialog', (d) => d.accept());

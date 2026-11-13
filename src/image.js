@@ -2,12 +2,20 @@
 import { fmtDuration, fmtStamp } from './format.js';
 
 // The stamp keeps a dark band so it stands out on any photo in the chat.
-const BAND = '#1F3326';
-const POP = '#F0683F'; // tally and top rule
-const TEXT = '#F6F5F0';
-const TEXT_2 = '#CBD5C7';
-const MUTED = '#A5B2A1';
-const FLAG = '#C9431F';
+// Its colours are the --stamp-* values in styles.css, so the whole palette
+// lives in one place.
+function stampColours() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  return {
+    BAND: v('--stamp-band', '#1F3326'),
+    POP: v('--stamp-pop', '#F6F5F0'), // tally and top rule
+    TEXT: v('--stamp-text', '#F6F5F0'),
+    TEXT_2: v('--stamp-text-2', '#CBD5C7'),
+    MUTED: v('--stamp-muted', '#A5B2A1'),
+    FLAG: v('--stamp-flag', '#C9431F'), // only for flagged sessions
+  };
+}
 
 function loadImage(blob) {
   return new Promise((resolve, reject) => {
@@ -80,6 +88,7 @@ export async function makeStamp(photoBlob, log, selfieBlob = null) {
   const W = 1080;
   const H = 1350;
   const BAND_H = 310;
+  const { BAND, POP, TEXT, TEXT_2, MUTED, FLAG } = stampColours();
   try {
     await Promise.all([
       document.fonts.load('700 96px "Space Grotesk"'),

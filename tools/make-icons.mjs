@@ -9,10 +9,10 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// Icon colours: forest green tile, cream tally strokes, orange strike.
+// Icon colours: forest green tile, cream tally strokes, sage strike.
 const NAVY = '#1F3326';
 const GOLD = '#F6F5F0';
-const WHITE = '#F0683F';
+const WHITE = '#8FBF8A';
 
 function barbell(angle, strokes = GOLD, bar = WHITE) {
   return `
