@@ -84,7 +84,8 @@ function roundedPath(ctx, x, y, w, h, r) {
 // Build the image that goes to the chat: the photo with a band underneath
 // carrying who, what, how long, when (server time) and the tally.
 // An optional selfie is inset over the top-left of the photo.
-export async function makeStamp(photoBlob, log, selfieBlob = null) {
+export async function makeStamp(photoBlob, log, selfieBlob = null, layout = 'band') {
+  if (layout !== 'band') return makeOverlayStamp(photoBlob, log, selfieBlob, layout);
   const W = 1080;
   const H = 1350;
   const BAND_H = 310;
@@ -167,6 +168,179 @@ export async function makeStamp(photoBlob, log, selfieBlob = null) {
   ctx.font = '500 34px "Inter", system-ui, sans-serif';
   ctx.fillStyle = MUTED;
   ctx.fillText(fitText(ctx, fmtStamp(log.logged_at, log.timezone), leftMax), 52, photoH + 250);
+
+  return toJpeg(canvas, 0.9);
+}
+
+function hexA(hex, alpha) {
+  const n = parseInt(String(hex).replace('#', ''), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+// Photo-first versions of the stamp: the photo fills a 3:4 frame (the shape a
+// phone takes in portrait) and the details sit over the bottom of it.
+//   glass - see-through dark bar      fade - no bar, the photo darkens at the bottom
+//   light - see-through white bar     chip - a small white card in the corner
+// Reading order by size: tally, name, activity, duration, date and time, group name.
+async function makeOverlayStamp(photoBlob, log, selfieBlob, layout) {
+  const W = 1080;
+  const H = 1440;
+  const c = stampColours();
+  const css = getComputedStyle(document.documentElement);
+  const token = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  const accent = token('--accent', '#2F5233');
+  const ink = token('--text', '#18211B');
+  const ink2 = token('--text-2', '#465047');
+  const DISPLAY = '"Space Grotesk", "Inter", system-ui, sans-serif';
+  const BODY = '"Inter", system-ui, sans-serif';
+  try {
+    await Promise.all([
+      document.fonts.load('700 96px "Space Grotesk"'),
+      document.fonts.load('700 30px "Inter"'),
+      document.fonts.load('600 30px "Inter"'),
+      document.fonts.load('500 30px "Inter"'),
+      document.fonts.load('400 30px "Inter"'),
+    ]);
+  } catch { /* fall back to system fonts */ }
+
+  const img = await loadImage(photoBlob);
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  drawCover(ctx, img, 0, 0, W, H);
+
+  // Group name: the quietest thing on the image.
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '2px';
+  pill(ctx, String(log.group_name || 'Accountability Bros').toUpperCase(), 36, 36, { bg: hexA(c.BAND, 0.55), fg: '#FFFFFF', font: `700 20px ${BODY}`, padX: 14, height: 40 });
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+
+  if (selfieBlob) {
+    const selfie = await loadImage(selfieBlob);
+    const x = 36; const y = 94; const w = 290; const h = 386; const r = 32; const edge = 6;
+    roundedPath(ctx, x - edge, y - edge, w + edge * 2, h + edge * 2, r + edge);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.save();
+    roundedPath(ctx, x, y, w, h, r);
+    ctx.clip();
+    drawCover(ctx, selfie, x, y, w, h);
+    ctx.restore();
+  }
+
+  let flagY = 36;
+  if (log.flag_short) {
+    pill(ctx, `Under the ${log.min_physical_minutes} min minimum`, W - 36, flagY, { bg: c.FLAG, fg: '#FFFFFF', font: `700 26px ${BODY}`, alignRight: true });
+    flagY += 64;
+  }
+  if (log.flag_same_day) {
+    pill(ctx, 'Second of the same today', W - 36, flagY, { bg: c.FLAG, fg: '#FFFFFF', font: `700 26px ${BODY}`, alignRight: true });
+  }
+
+  const tally = `${log.done}/${log.total}`;
+  const duration = fmtDuration(log.duration_min);
+  const when = fmtStamp(log.logged_at, log.timezone);
+  ctx.textBaseline = 'alphabetic';
+
+  // Draw "Activity · duration" with the activity heavier than the duration.
+  function activityLine(x, y, startSize, maxWidth, strong, soft) {
+    const tail = ` · ${duration}`;
+    // Shrink a little before cutting a long activity name short.
+    let size = startSize;
+    let tailW = 0;
+    for (;;) {
+      ctx.font = `400 ${size}px ${BODY}`;
+      tailW = ctx.measureText(tail).width;
+      ctx.font = `700 ${size}px ${BODY}`;
+      if (ctx.measureText(log.activity).width + tailW <= maxWidth || size <= startSize - 10) break;
+      size -= 2;
+    }
+    const head = fitText(ctx, log.activity, Math.max(80, maxWidth - tailW));
+    ctx.fillStyle = strong;
+    ctx.fillText(head, x, y);
+    const headW = ctx.measureText(head).width;
+    ctx.font = `400 ${size}px ${BODY}`;
+    ctx.fillStyle = soft;
+    ctx.fillText(tail, x + headW, y);
+    return headW + tailW;
+  }
+
+  if (layout === 'chip') {
+    const pad = 30;
+    const cardH = 184;
+    ctx.font = `700 116px ${DISPLAY}`;
+    const tallyW = ctx.measureText(tally).width;
+    const textMax = W - 80 - pad * 3 - tallyW - 34;
+    ctx.font = `700 46px ${DISPLAY}`;
+    const nameText = fitText(ctx, log.nickname, textMax);
+    const nameW = ctx.measureText(nameText).width;
+    ctx.font = `400 32px ${BODY}`;
+    const lineW = ctx.measureText(`${log.activity} · ${duration}`).width + 8;
+    ctx.font = `500 25px ${BODY}`;
+    const whenW = ctx.measureText(when).width;
+    const textW = Math.min(textMax, Math.max(nameW, lineW, whenW));
+    const cardW = pad + tallyW + pad + 34 + textW + pad;
+    const x = 40;
+    const y = H - 40 - cardH;
+    roundedPath(ctx, x, y, cardW, cardH, 36);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.fill();
+    ctx.textAlign = 'left';
+    ctx.font = `700 116px ${DISPLAY}`;
+    ctx.fillStyle = accent;
+    ctx.fillText(tally, x + pad, y + 128);
+    ctx.fillStyle = hexA(ink, 0.16);
+    ctx.fillRect(x + pad + tallyW + pad, y + 34, 3, cardH - 68);
+    const tx = x + pad + tallyW + pad + 34;
+    ctx.font = `700 46px ${DISPLAY}`;
+    ctx.fillStyle = ink;
+    ctx.fillText(nameText, tx, y + 68);
+    activityLine(tx, y + 114, 32, textW, ink, ink2);
+    ctx.font = `500 25px ${BODY}`;
+    ctx.fillStyle = ink2;
+    ctx.fillText(fitText(ctx, when, textW), tx, y + 154);
+    return toJpeg(canvas, 0.9);
+  }
+
+  const BAR = 236;
+  const top = H - BAR;
+  let strong = '#FFFFFF';
+  let soft = 'rgba(255, 255, 255, 0.88)';
+  let quiet = 'rgba(255, 255, 255, 0.74)';
+  let tallyColour = '#FFFFFF';
+  if (layout === 'glass') {
+    ctx.fillStyle = hexA(c.BAND, 0.6);
+    ctx.fillRect(0, top, W, BAR);
+  } else if (layout === 'fade') {
+    const g = ctx.createLinearGradient(0, H - 620, 0, H);
+    g.addColorStop(0, 'rgba(10, 18, 12, 0)');
+    g.addColorStop(0.55, 'rgba(10, 18, 12, 0.5)');
+    g.addColorStop(1, 'rgba(10, 18, 12, 0.86)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, H - 620, W, 620);
+  } else {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.86)';
+    ctx.fillRect(0, top, W, BAR);
+    strong = ink;
+    soft = ink2;
+    quiet = ink2;
+    tallyColour = accent;
+  }
+
+  ctx.textAlign = 'right';
+  ctx.font = `700 172px ${DISPLAY}`;
+  ctx.fillStyle = tallyColour;
+  ctx.fillText(tally, W - 48, H - 54);
+  const leftMax = W - 48 - ctx.measureText(tally).width - 48 - 36;
+
+  ctx.textAlign = 'left';
+  ctx.font = `700 62px ${DISPLAY}`;
+  ctx.fillStyle = strong;
+  ctx.fillText(fitText(ctx, log.nickname, leftMax), 48, top + 86);
+  activityLine(48, top + 144, 40, leftMax, strong, soft);
+  ctx.font = `500 28px ${BODY}`;
+  ctx.fillStyle = quiet;
+  ctx.fillText(fitText(ctx, when, leftMax), 48, top + 194);
 
   return toJpeg(canvas, 0.9);
 }

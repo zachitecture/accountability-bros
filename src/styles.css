@@ -1,15 +1,15 @@
-/* Palette: cream paper, forest green, and a little orange for warnings. */
+/* Palette ("Paper"): plain white and light grey, forest green, and orange only for warnings. */
 :root {
-  --bg: #F6F5F0;
+  --bg: #F5F6F5;
   --surface: #FFFFFF;
-  --surface-2: #EEF2EA;
-  --selected: #E8EFE3;
-  --line: #E2E0D7;
-  --line-strong: #BFC2B6;
-  --dim: #9CA296;
-  --text: #1C2A21;
-  --text-2: #485449;
-  --muted: #636B61;
+  --surface-2: #EDF1EC;
+  --selected: #E7EFE4;
+  --line: #E3E5E2;
+  --line-strong: #C2C6C1;
+  --dim: #9BA19A;
+  --text: #18211B;
+  --text-2: #465047;
+  --muted: #626A63;
   --accent: #2F5233;
   --accent-hover: #3C6741;
   --accent-ink: #FFFFFF;
@@ -19,10 +19,10 @@
   --you-ink: var(--accent-ink);
   /* The stamped image that goes to the chat (read by src/image.js). */
   --stamp-band: #1F3326;
-  --stamp-text: #F6F5F0;
+  --stamp-text: #FFFFFF;
   --stamp-text-2: #CBD5C7;
   --stamp-muted: #A5B2A1;
-  --stamp-pop: #F6F5F0;
+  --stamp-pop: #FFFFFF;
   --stamp-flag: #C9431F;
   --display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
