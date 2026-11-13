@@ -8,6 +8,7 @@ import Group from './screens/Group.jsx';
 import Member from './screens/Member.jsx';
 import Kitty from './screens/Kitty.jsx';
 import More from './screens/More.jsx';
+import Leave from './screens/Leave.jsx';
 
 const TABS = [
   ['log', 'Log', 'log'],
@@ -99,12 +100,14 @@ export default function App() {
 
   const [page, a, b] = route;
   let screen;
-  if (page === 'goals') screen = <Goals key={`${a || 'me'}-${b || ''}`} state={state} userId={a} week={b} />;
+  if (page === 'leave') screen = <Leave />;
+  else if (page === 'goals') screen = <Goals key={`${a || 'me'}-${b || ''}`} state={state} userId={a} week={b} />;
   else if (page === 'group') screen = <Group state={state} />;
   else if (page === 'member' && a) screen = <Member key={a} state={state} userId={a} />;
   else if (page === 'kitty') screen = <Kitty state={state} />;
   else if (page === 'more') screen = <More state={state} email={session.user.email} onState={setState} refresh={refresh} />;
   else screen = <Log state={state} refresh={refresh} />;
 
-  return <Shell tabs active={page === 'member' ? 'group' : page}>{screen}</Shell>;
+  const active = page === 'member' ? 'group' : page === 'leave' ? 'goals' : page;
+  return <Shell tabs active={active}>{screen}</Shell>;
 }

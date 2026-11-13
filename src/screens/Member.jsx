@@ -43,7 +43,7 @@ export default function Member({ state, userId }) {
             <button type="button" className="icon-btn" aria-label="Previous week" onClick={() => setWeek(addDays(d.week_start, -7))}><Icon name="back" size={18} width={2.4} /></button>
             <div className="center">
               <div className="name" style={{ fontSize: 15 }}>Week of {fmtDate(d.week_start)}</div>
-              <div className="small muted">{done} of {total} done{d.excused ? ' · excused' : ''}</div>
+              <div className="small muted">{done} of {total} done{d.on_leave ? ' · on leave' : ''}{d.excused ? ' · excused' : ''}</div>
             </div>
             <button type="button" className="icon-btn" aria-label="Next week" disabled={isCurrent} onClick={() => setWeek(addDays(d.week_start, 7))}><Icon name="next" size={18} width={2.4} /></button>
           </div>

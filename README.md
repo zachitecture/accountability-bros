@@ -11,12 +11,16 @@ The chat stays the home. The app is a link you add to your phone's home screen.
 | Screen | What it does |
 | --- | --- |
 | Log | Pick a goal, enter minutes, take a photo, get the stamped image, share it |
-| Goals | Declare this week (until Monday 11:59 pm) or next week |
+| Goals | Declare this week (until Monday 11:59 pm) or next week; take annual or sick leave |
 | Group | Everyone's tally and streak; tap a member for their proof photos and past weeks |
 | Kitty | What is in the Kitty, what is owed, forfeits and fees |
-| More | Your name; for admins, the member list and the rules |
+| More | Your name; for admins, the member list, the rules, and long sick leave to approve |
 
-Not in yet: the dispute form, the Terms of Reference page, leave requests, watch data.
+Leave: annual leave is requested before it starts, sick or injury leave can start today, and neither can be
+backdated. Sick leave over 7 days needs an admin to approve the extra days. A week with at least 4 days of
+leave (adjustable in the rules) carries no forfeit and does not break a streak.
+
+Not in yet: the dispute form, the Terms of Reference page, watch data.
 
 ## The rules the database enforces
 

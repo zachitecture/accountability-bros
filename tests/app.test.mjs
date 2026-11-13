@@ -227,7 +227,7 @@ try {
   await page.getByText('3 / 7').waitFor();
   await page.getByText('Time set by the app: Tue 10 Nov, 6:14 pm').waitFor();
   const size = await page.locator('img.stamp-img').evaluate(async (img) => { await img.decode(); return [img.naturalWidth, img.naturalHeight]; });
-  assert.deepEqual(size, [1080, 1350]);
+  assert.deepEqual(size, [1080, 1440]);
   const stampUrl = await page.locator('img.stamp-img').getAttribute('src');
   const stampB64 = await page.evaluate(async (u) => {
     const buf = await (await fetch(u)).arrayBuffer();
@@ -239,7 +239,7 @@ try {
   const stored = [...fake.files.values()][0];
   assert.ok(stored.length > 5000 && stored.length < 600000, `stored photo is ${stored.length} bytes`);
   assert.equal(stored.subarray(0, 2).toString('hex'), 'ffd8');
-  ok(`log + stamp: 1080x1350 image, server time, tally 3/7, stored photo ${Math.round(stored.length / 1024)} KB`);
+  ok(`log + stamp: 1080x1440 image, server time, tally 3/7, stored photo ${Math.round(stored.length / 1024)} KB`);
 
   // A short second gym session the same day gets both flags.
   await page.getByRole('button', { name: 'Log another' }).click();
@@ -379,6 +379,49 @@ try {
   await p2.getByText('Gym · 52 min').waitFor();
   assert.equal(await p2.getByRole('button', { name: /Undo|Remove entry/ }).count(), 0);
   ok('new member: join code enforced, no admin or Kitty controls');
+
+  // ---- leave: 10 days of sick leave from today (Tue 10 Nov). The first 7 stand, the Executive decides the rest.
+  await p2.getByRole('link', { name: 'Goals', exact: true }).click();
+  await p2.getByRole('link', { name: 'Sick, injured or away? Take leave' }).click();
+  await p2.getByRole('heading', { name: 'Leave' }).waitFor();
+  assert.equal(await p2.getByLabel('First day').inputValue(), '2026-11-10');
+  // Annual leave cannot start today.
+  await p2.getByRole('button', { name: 'Annual', exact: true }).click();
+  await p2.waitForFunction(() => document.getElementById('leave-start').value === '2026-11-11');
+  await p2.getByRole('button', { name: 'Sick or injury', exact: true }).click();
+  await p2.getByLabel('First day').fill('2026-11-10');
+  await p2.getByLabel('Last day').fill('2026-11-19');
+  await p2.getByLabel('Note (optional)').fill('Rolled ankle');
+  await p2.getByText('10 days of leave. What it means for each week:').waitFor();
+  await p2.getByText('Week of Mon 9 Nov: 6 days. A leave week: no goals needed and no forfeit.').waitFor();
+  await p2.getByText('Week of Mon 16 Nov: 1 day. Still a normal week (leave needs to cover 4 days).').waitFor();
+  await shot(p2, 'leave-form');
+  await p2.getByRole('button', { name: 'Take leave', exact: true }).click();
+  await p2.getByText('The first 7 days are approved and the Executive has been asked about the rest.').waitFor();
+  await p2.getByText('You are on leave this week.').waitFor();
+  await p2.getByText('First 7 days approved (to 16 Nov). The rest is waiting on the Executive. · Rolled ankle').waitFor();
+  assert.equal(await p2.getByText('You are on leave next week.').count(), 0);
+  await shot(p2, 'leave-taken');
+  await p2.getByRole('link', { name: 'Group', exact: true }).click();
+  await p2.locator('a.member', { hasText: 'Newbie' }).getByText('On leave').waitFor();
+  ok('leave: sick leave over a week is approved for 7 days and waits on the Executive');
+
+  // Khov (admin) approves the extra days, which makes next week a leave week too.
+  await page.goto(`${APP}/#/more`);
+  await page.reload();
+  await page.getByText('Leave waiting for the Executive').waitFor();
+  await page.getByText('Newbie: sick or injury leave').waitFor();
+  await shot(page, 'leave-approval');
+  await page.getByRole('button', { name: 'Approve the rest' }).click();
+  await page.getByText('Leave waiting for the Executive').waitFor({ state: 'detached' });
+  await p2.goto(`${APP}/#/leave`);
+  await p2.reload();
+  await p2.getByText('You are on leave next week.').waitFor();
+  await p2.getByText('Approved · Rolled ankle').waitFor();
+  // Ending the leave today puts next week back to normal.
+  await p2.getByRole('button', { name: 'End leave today' }).click();
+  await p2.getByText('You are on leave next week.').waitFor({ state: 'detached' });
+  ok('leave: the Executive approves the rest; leave can be ended early');
 
   assert.deepEqual(problems, []);
   console.log('\nAll app checks passed.');

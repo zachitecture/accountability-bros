@@ -23,6 +23,8 @@ create table if not exists public.settings (
 insert into public.settings (id) values (1) on conflict (id) do nothing;
 -- Lets someone who joins after the Monday lock still set goals for that first week.
 alter table public.settings add column if not exists first_week_grace boolean not null default true;
+-- A week counts as a leave week when approved leave covers at least this many of its days.
+alter table public.settings add column if not exists leave_min_days int not null default 4;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
@@ -98,6 +100,27 @@ create table if not exists public.week_rulings (
   primary key (user_id, week_start)
 );
 
+-- Leave under Clause 9 of the Terms. "approved_until" is the last day that counts:
+--   annual leave, and sick leave of up to 7 days: the whole request
+--   sick leave over 7 days: the first 7 days, until the Executive approves the rest
+create table if not exists public.leave_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  kind text not null check (kind in ('annual', 'sick')),
+  start_date date not null,
+  end_date date not null,
+  approved_until date not null,
+  status text not null default 'approved' check (status in ('approved', 'pending', 'declined')),
+  note text not null default '',
+  created_at timestamptz not null default now(),
+  decided_by uuid references public.profiles (id) on delete set null,
+  decided_at timestamptz,
+  check (end_date >= start_date)
+);
+create index if not exists leave_requests_user on public.leave_requests (user_id, start_date);
+alter table public.leave_requests enable row level security;
+revoke all on table public.leave_requests from anon, authenticated;
+
 alter table public.settings enable row level security;
 alter table public.profiles enable row level security;
 alter table public.goals enable row level security;
@@ -162,8 +185,29 @@ language sql stable security definer set search_path = public as $$
          and (select count(*) from public.logs l where l.goal_id = g.id) < g.target)
 $$;
 
+-- How many days of a week (Monday to Sunday) a member's approved leave covers.
+create or replace function public.leave_days(p_user uuid, p_week date) returns int
+language sql stable security definer set search_path = public as $$
+  select coalesce(sum(greatest(0, (least(l.approved_until, p_week + 6) - greatest(l.start_date, p_week)) + 1)), 0)::int
+  from public.leave_requests l
+  where l.user_id = p_user and l.start_date <= p_week + 6 and l.approved_until >= p_week
+$$;
+
+-- A member is "on leave" for a week when leave covers enough of it (the leave_min_days setting).
+create or replace function public.on_leave(p_user uuid, p_week date) returns boolean
+language sql stable security definer set search_path = public as $$
+  select public.leave_days(p_user, p_week) >= (select leave_min_days from public.settings where id = 1)
+$$;
+
+-- Eligible Members for a given week: active, marked eligible, and not on leave that week.
+create or replace function public.eligible_count(p_week date) returns int
+language sql stable security definer set search_path = public as $$
+  select count(*)::int from public.profiles p
+  where p.active and p.eligible and not public.on_leave(p.id, p_week)
+$$;
+
 -- Weeks in a row with every goal met. The current week counts once it is complete.
--- Excused weeks neither add to the streak nor break it.
+-- Excused weeks and leave weeks neither add to the streak nor break it.
 create or replace function public.streak(p_user uuid) returns int
 language plpgsql stable security definer set search_path = public as $$
 declare
@@ -176,7 +220,8 @@ begin
   loop
     w := w - 7; i := i + 1;
     exit when i > 520;
-    if exists (select 1 from public.week_rulings r where r.user_id = p_user and r.week_start = w) then
+    if exists (select 1 from public.week_rulings r where r.user_id = p_user and r.week_start = w)
+       or public.on_leave(p_user, w) then
       continue;
     end if;
     exit when not public.week_complete(p_user, w);
@@ -324,7 +369,8 @@ begin
     'user_id', t.id, 'nickname', t.nickname, 'title', t.title, 'timezone', t.timezone,
     'week_start', v_week, 'current_week', v_cur, 'lock_at', v_lock,
     'editable', public.edit_until(t.id, v_week) is not null, 'edit_until', public.edit_until(t.id, v_week),
-    'goals', v_goals, 'reason', v_reason, 'history', v_hist);
+    'goals', v_goals, 'reason', v_reason, 'history', v_hist,
+    'leave_days', public.leave_days(t.id, v_week), 'on_leave', public.on_leave(t.id, v_week));
 end $$;
 
 -- Replace a member's goals for a week. Members can do this for the current week
@@ -392,7 +438,7 @@ begin
     v_pos := v_pos + 1;
   end loop;
 
-  if v_total < s.min_goals and v_reason is null and not v_override then
+  if v_total < s.min_goals and v_reason is null and not v_override and not public.on_leave(t.id, p_week) then
     raise exception 'That is under the minimum of %. Add a reason for the lighter week.', s.min_goals;
   end if;
 
@@ -506,6 +552,7 @@ begin
         'done', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk),
         'flags', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk and (l.flag_short or l.flag_same_day)),
         'reason', (select n.reason from public.week_notes n where n.user_id = p.id and n.week_start = w.wk),
+        'on_leave', public.on_leave(p.id, w.wk),
         'streak', public.streak(p.id)) as j
     from public.profiles p
     cross join lateral (select public.week_of(p.timezone) as wk) w
@@ -551,7 +598,7 @@ declare
   v_entries jsonb; v_misses jsonb := '[]'::jsonb; v_members jsonb := '[]'::jsonb;
 begin
   select * into s from public.settings where id = 1;
-  select count(*) into v_elig from public.profiles where active and eligible;
+  v_elig := public.eligible_count(public.week_of(m.timezone));
   select coalesce(sum(amount) filter (where status = 'paid'), 0),
          coalesce(sum(amount) filter (where status = 'owed'), 0)
     into v_in, v_owed from public.ledger;
@@ -568,7 +615,8 @@ begin
     -- Finished weeks (up to four back) where an eligible member fell short and
     -- nothing has been decided yet.
     select coalesce(jsonb_agg(jsonb_build_object(
-             'user_id', q.id, 'nickname', q.nickname, 'week_start', q.wk, 'total', q.total, 'done', q.done, 'is_mine', q.id = m.id)
+             'user_id', q.id, 'nickname', q.nickname, 'week_start', q.wk, 'total', q.total, 'done', q.done, 'is_mine', q.id = m.id,
+             'amount', s.forfeit_per_member * greatest(public.eligible_count(q.wk), 1))
              order by q.wk desc, q.nickname), '[]'::jsonb)
       into v_misses
       from (
@@ -583,6 +631,7 @@ begin
           and not public.week_complete(p.id, w.wk)
           and not exists (select 1 from public.ledger e where e.user_id = p.id and e.kind = 'forfeit' and e.week_start = w.wk)
           and not exists (select 1 from public.week_rulings r where r.user_id = p.id and r.week_start = w.wk)
+          and not public.on_leave(p.id, w.wk)
       ) q;
     select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'nickname', p.nickname) order by p.nickname), '[]'::jsonb)
       into v_members from public.profiles p where p.active;
@@ -609,8 +658,10 @@ begin
   if exists (select 1 from public.ledger where user_id = p_user and kind = 'forfeit' and week_start = p_week) then
     raise exception 'A forfeit for that week already exists.';
   end if;
+  if public.on_leave(p_user, p_week) then raise exception '% was on leave that week.', t.nickname; end if;
   select * into s from public.settings where id = 1;
-  select count(*) into v_elig from public.profiles where active and eligible;
+  -- $5 x the number of Eligible Members for that week (members on leave do not count).
+  v_elig := public.eligible_count(p_week);
   insert into public.ledger (user_id, kind, week_start, amount, status, due_date, created_by, created_at)
   values (p_user, 'forfeit', p_week, s.forfeit_per_member * greatest(v_elig, 1), 'owed',
           (public.app_now() at time zone m.timezone)::date + s.forfeit_due_days, m.id, public.app_now());
@@ -683,6 +734,115 @@ begin
   if e.user_id = m.id then raise exception 'Another Kitty manager has to remove your own entry.'; end if;
   delete from public.ledger where id = p_id;
   return public.get_kitty();
+end $$;
+
+-- ----------------------------------------------------------------- leave ---
+
+create or replace function public.get_leave() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  s public.settings; v_today date; v_week date; v_mine jsonb; v_pending jsonb := '[]'::jsonb;
+begin
+  select * into s from public.settings where id = 1;
+  v_today := (public.app_now() at time zone m.timezone)::date;
+  v_week := public.week_of(m.timezone);
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', l.id, 'kind', l.kind, 'start_date', l.start_date, 'end_date', l.end_date,
+           'approved_until', l.approved_until, 'status', l.status, 'note', l.note,
+           'state', case when l.end_date < v_today then 'past' when l.start_date > v_today then 'upcoming' else 'current' end)
+           order by l.start_date desc), '[]'::jsonb)
+    into v_mine
+    from (select * from public.leave_requests where user_id = m.id order by start_date desc limit 20) l;
+  if m.is_admin then
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'id', l.id, 'user_id', l.user_id, 'nickname', p.nickname, 'kind', l.kind,
+             'start_date', l.start_date, 'end_date', l.end_date, 'approved_until', l.approved_until,
+             'note', l.note, 'is_mine', l.user_id = m.id) order by l.created_at), '[]'::jsonb)
+      into v_pending
+      from public.leave_requests l join public.profiles p on p.id = l.user_id
+      where l.status = 'pending';
+  end if;
+  return jsonb_build_object(
+    'today', v_today, 'week_start', v_week, 'min_days', s.leave_min_days, 'is_admin', m.is_admin,
+    'this_week', jsonb_build_object('days', public.leave_days(m.id, v_week), 'on_leave', public.on_leave(m.id, v_week)),
+    'next_week', jsonb_build_object('days', public.leave_days(m.id, v_week + 7), 'on_leave', public.on_leave(m.id, v_week + 7)),
+    'leaves', v_mine, 'pending', v_pending);
+end $$;
+
+-- Clause 9: annual leave is requested before it begins and cannot be refused.
+-- Sick leave can start today or later (never backdated). Up to 7 days is
+-- automatic; beyond that the first 7 days stand and the Executive decides the rest.
+create or replace function public.request_leave(p_kind text, p_start date, p_end date, p_note text default '') returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  v_today date; v_long boolean;
+begin
+  v_today := (public.app_now() at time zone m.timezone)::date;
+  if p_kind is null or p_kind not in ('annual', 'sick') then raise exception 'Choose annual leave or sick leave.'; end if;
+  if p_start is null or p_end is null then raise exception 'Pick the first and last day.'; end if;
+  if p_end < p_start then raise exception 'The last day is before the first day.'; end if;
+  if p_end - p_start > 365 then raise exception 'That is more than a year. Check the dates.'; end if;
+  if p_kind = 'annual' and p_start <= v_today then
+    raise exception 'Annual leave has to be requested before it starts, so the first day must be tomorrow or later.';
+  end if;
+  if p_kind = 'sick' and p_start < v_today then
+    raise exception 'Sick leave cannot be backdated. It can start today or later.';
+  end if;
+  if exists (select 1 from public.leave_requests where user_id = m.id and start_date <= p_end and end_date >= p_start) then
+    raise exception 'You already have leave over those dates.';
+  end if;
+  v_long := p_kind = 'sick' and (p_end - p_start + 1) > 7;
+  insert into public.leave_requests (user_id, kind, start_date, end_date, approved_until, status, note, created_at)
+  values (m.id, p_kind, p_start, p_end,
+          case when v_long then p_start + 6 else p_end end,
+          case when v_long then 'pending' else 'approved' end,
+          left(btrim(coalesce(p_note, '')), 280), public.app_now());
+  return public.get_leave();
+end $$;
+
+-- Cancel leave that has not started, or end current leave today. Past leave stays on the record.
+create or replace function public.cancel_leave(p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  l public.leave_requests; v_today date;
+begin
+  v_today := (public.app_now() at time zone m.timezone)::date;
+  select * into l from public.leave_requests where id = p_id and user_id = m.id;
+  if l.id is null then raise exception 'That leave was not found.'; end if;
+  if l.end_date < v_today then raise exception 'That leave has already finished.'; end if;
+  if l.start_date > v_today then
+    delete from public.leave_requests where id = l.id;
+  else
+    update public.leave_requests
+      set end_date = v_today,
+          approved_until = least(approved_until, v_today),
+          status = case when status = 'pending' and v_today <= start_date + 6 then 'approved' else status end
+      where id = l.id;
+  end if;
+  return public.get_leave();
+end $$;
+
+-- The Executive approves or declines the part of a sick leave beyond its first 7 days.
+create or replace function public.decide_leave(p_id uuid, p_approve boolean) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  l public.leave_requests;
+begin
+  if not m.is_admin then raise exception 'Only the Executive can do that.'; end if;
+  select * into l from public.leave_requests where id = p_id;
+  if l.id is null then raise exception 'That leave was not found.'; end if;
+  if l.user_id = m.id then raise exception 'The other member of the Executive has to decide your own leave.'; end if;
+  if l.status <> 'pending' then raise exception 'That leave has already been decided.'; end if;
+  update public.leave_requests
+    set status = case when p_approve then 'approved' else 'declined' end,
+        approved_until = case when p_approve then end_date else approved_until end,
+        decided_by = m.id, decided_at = public.app_now()
+    where id = l.id;
+  return public.get_leave();
 end $$;
 
 -- ----------------------------------------------------------------- admin ---
@@ -767,6 +927,7 @@ begin
   if p_patch ? 'min_physical_minutes' then s.min_physical_minutes := (p_patch->>'min_physical_minutes')::int; end if;
   if p_patch ? 'forfeit_per_member' then s.forfeit_per_member := (p_patch->>'forfeit_per_member')::numeric; end if;
   if p_patch ? 'forfeit_due_days' then s.forfeit_due_days := (p_patch->>'forfeit_due_days')::int; end if;
+  if p_patch ? 'leave_min_days' then s.leave_min_days := (p_patch->>'leave_min_days')::int; end if;
   if p_patch ? 'first_week_grace' then s.first_week_grace := coalesce((p_patch->>'first_week_grace')::boolean, s.first_week_grace); end if;
   if p_patch ? 'join_code' then
     v_code := upper(btrim(coalesce(p_patch->>'join_code', '')));
@@ -777,9 +938,11 @@ begin
   if s.min_physical_minutes < 0 or s.min_physical_minutes > 240 then raise exception 'Minimum minutes must be between 0 and 240.'; end if;
   if s.forfeit_per_member < 0 or s.forfeit_per_member > 1000 then raise exception 'The forfeit per member must be between 0 and 1000.'; end if;
   if s.forfeit_due_days < 0 or s.forfeit_due_days > 90 then raise exception 'Days to pay must be between 0 and 90.'; end if;
+  if s.leave_min_days < 1 or s.leave_min_days > 7 then raise exception 'Leave days needed must be between 1 and 7.'; end if;
   update public.settings set group_name = s.group_name, min_goals = s.min_goals,
     min_physical_minutes = s.min_physical_minutes, forfeit_per_member = s.forfeit_per_member,
-    forfeit_due_days = s.forfeit_due_days, join_code = s.join_code, first_week_grace = s.first_week_grace
+    forfeit_due_days = s.forfeit_due_days, join_code = s.join_code, first_week_grace = s.first_week_grace,
+    leave_min_days = s.leave_min_days
   where id = 1;
   return to_jsonb(s);
 end $$;
@@ -794,8 +957,10 @@ declare
   r record;
   api text[] := array['get_state', 'join_group', 'update_my_profile', 'get_week', 'save_goals', 'log_activity',
     'undo_log', 'get_group', 'get_member', 'get_kitty', 'issue_forfeit', 'excuse_week', 'add_entry', 'set_paid',
-    'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member'];
-  internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until'];
+    'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member',
+    'get_leave', 'request_leave', 'cancel_leave', 'decide_leave'];
+  internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until',
+    'leave_days', 'on_leave', 'eligible_count'];
 begin
   for r in
     select p.oid::regprocedure as sig, p.proname

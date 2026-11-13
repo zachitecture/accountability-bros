@@ -58,7 +58,7 @@ export default function Kitty() {
                 <div className={`kitty-num${k.owed > 0 ? ' warn' : ''}`}>{money(k.owed)}</div>
               </div>
             </div>
-            <div className="rule-line">Forfeit for a missed week: {money(k.forfeit_per_member)} × {k.eligible_count} eligible members = {money(k.forfeit_amount)}</div>
+            <div className="rule-line">Forfeit for a missed week: {money(k.forfeit_per_member)} × {k.eligible_count} eligible members = {money(k.forfeit_amount)}. Members on leave that week are not counted.</div>
           </div>
 
           <ErrorNote>{error}</ErrorNote>
@@ -77,8 +77,8 @@ export default function Kitty() {
                   </div>
                   <div className="actions">
                     <button type="button" className="btn small-btn" disabled={busy}
-                      onClick={() => act('issue_forfeit', { p_user: m.user_id, p_week: m.week_start }, `Issue a ${money(k.forfeit_amount)} forfeit to ${m.nickname}?`)}>
-                      Issue {money(k.forfeit_amount)} forfeit
+                      onClick={() => act('issue_forfeit', { p_user: m.user_id, p_week: m.week_start }, `Issue a ${money(m.amount ?? k.forfeit_amount)} forfeit to ${m.nickname}?`)}>
+                      Issue {money(m.amount ?? k.forfeit_amount)} forfeit
                     </button>
                     <button type="button" className="btn small-btn" disabled={busy || m.is_mine}
                       onClick={() => act('excuse_week', { p_user: m.user_id, p_week: m.week_start, p_note: '' }, `Excuse ${m.nickname} for that week? No forfeit, and their streak is not broken.`)}>

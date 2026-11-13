@@ -67,7 +67,7 @@ export default function Goals({ state, userId, week: fixedWeek }) {
   const minMinutes = state.settings.min_physical_minutes;
   const total = rows.reduce((n, r) => n + r.target, 0);
   const canEdit = Boolean(data) && (data.editable || forOther);
-  const needsReason = !forOther && total < min;
+  const needsReason = !forOther && total < min && !(data && data.on_leave);
 
   function patch(key, change) {
     setSaved(false);
@@ -213,6 +213,12 @@ export default function Goals({ state, userId, week: fixedWeek }) {
             </div>
           )}
 
+          {data.on_leave ? (
+            <div className="notice good" role="status">
+              {forOther ? `${data.nickname} is` : 'You are'} on leave for this week ({data.leave_days} of 7 days). Goals are optional and no forfeit applies.
+            </div>
+          ) : null}
+
           <div className="card row between" style={{ alignItems: 'flex-end' }}>
             <div className="stack" style={{ gap: 6 }}>
               <div className="total-num">{plural(total, 'goal')}</div>
@@ -249,6 +255,7 @@ export default function Goals({ state, userId, week: fixedWeek }) {
               <div className="small muted center">After the lock, swaps need the Executive.</div>
             </>
           )}
+          {forOther ? null : <a className="btn" href="#/leave">Sick, injured or away? Take leave</a>}
         </>
       ) : null}
     </main>

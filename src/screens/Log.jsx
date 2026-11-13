@@ -191,7 +191,9 @@ export default function Log({ state }) {
         <div className="card stack">
           <div className="name">No goals declared this week</div>
           <div className="sub">
-            {state.locked
+            {week.data.on_leave
+              ? 'You are on leave this week, so nothing is required. No forfeit applies.'
+              : state.locked
               ? 'This week locked on Monday night with nothing declared. You can set next week\'s goals now.'
               : state.grace
                 ? 'You joined part-way through the week. You have 24 hours from joining to set this week\'s goals, then you can log them here.'

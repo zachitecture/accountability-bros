@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { rpc, supabase } from '../api.js';
+import { fmtDate } from '../format.js';
 import { ErrorNote, Head, Loading, useLoad } from '../ui.jsx';
 
 function Profile({ state, email, onState }) {
@@ -118,7 +119,7 @@ function Rules({ refresh }) {
       const s = await rpc('update_settings', { p_patch: {
         group_name: f.group_name, min_goals: Number(f.min_goals), min_physical_minutes: Number(f.min_physical_minutes),
         forfeit_per_member: Number(f.forfeit_per_member), forfeit_due_days: Number(f.forfeit_due_days), join_code: f.join_code,
-        first_week_grace: Boolean(f.first_week_grace),
+        first_week_grace: Boolean(f.first_week_grace), leave_min_days: Number(f.leave_min_days),
       } });
       load.setData(s);
       setSaved(true);
@@ -139,6 +140,7 @@ function Rules({ refresh }) {
       <div className="field"><label className="label" htmlFor="r-mins">Physical sessions must be over (minutes)</label><input id="r-mins" className="input" inputMode="numeric" value={f.min_physical_minutes} onChange={set('min_physical_minutes')} /></div>
       <div className="field"><label className="label" htmlFor="r-forfeit">Forfeit per Eligible Member ($)</label><input id="r-forfeit" className="input" inputMode="decimal" value={f.forfeit_per_member} onChange={set('forfeit_per_member')} /></div>
       <div className="field"><label className="label" htmlFor="r-days">Days to pay</label><input id="r-days" className="input" inputMode="numeric" value={f.forfeit_due_days} onChange={set('forfeit_due_days')} /></div>
+      <div className="field"><label className="label" htmlFor="r-leave">Days of leave needed for a week to count as a leave week (1 to 7)</label><input id="r-leave" className="input" inputMode="numeric" value={f.leave_min_days ?? ''} onChange={set('leave_min_days')} /></div>
       <label className="check">
         <input type="checkbox" checked={Boolean(f.first_week_grace)} onChange={(e) => { setF({ ...f, first_week_grace: e.target.checked }); setSaved(false); }} />
         New members can set goals for the week they join (for 24 hours after joining)
@@ -151,13 +153,53 @@ function Rules({ refresh }) {
   );
 }
 
+// Sick leave longer than a week: the Executive approves or declines the extra days.
+function LeaveApprovals() {
+  const load = useLoad(() => rpc('get_leave'), []);
+  const [error, setError] = useState('');
+  const pending = (load.data && load.data.pending) || [];
+  if (pending.length === 0) return null;
+
+  async function decide(l, approve) {
+    if (!window.confirm(`${approve ? 'Approve' : 'Decline'} the extra days of ${l.nickname}'s sick leave?`)) return;
+    setError('');
+    try {
+      await rpc('decide_leave', { p_id: l.id, p_approve: approve });
+      load.reload();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="label">Leave waiting for the Executive</div>
+      <ErrorNote>{error}</ErrorNote>
+      {pending.map((l) => (
+        <div key={l.id} className="card stack">
+          <div className="name" style={{ fontSize: 15 }}>{l.nickname}: sick or injury leave</div>
+          <div className="sub">{fmtDate(l.start_date)} to {fmtDate(l.end_date)}. Approved so far up to {fmtDate(l.approved_until, false)}.{l.note ? ` Note: ${l.note}` : ''}</div>
+          {l.is_mine ? <div className="tiny muted">The other member of the Executive has to decide your own leave.</div> : (
+            <div className="actions">
+              <button type="button" className="btn small-btn" onClick={() => decide(l, true)}>Approve the rest</button>
+              <button type="button" className="btn small-btn danger" onClick={() => decide(l, false)}>Decline the rest</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function More({ state, email, onState, refresh }) {
   return (
     <main className="screen">
       <Head eyebrow={state.settings.group_name} title="More" />
       <Profile state={state} email={email} onState={onState} />
+      <a className="btn" href="#/leave">Sick, injured or away? Take leave</a>
       {state.me.is_admin ? (
         <>
+          <LeaveApprovals />
           <Members refresh={refresh} />
           <Rules refresh={refresh} />
         </>

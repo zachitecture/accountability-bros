@@ -308,6 +308,81 @@ await test('joining mid-week: 24 hours to set goals for that first week', async 
   assert.equal((await call(khov, 'get_kitty')).misses.some((m) => m.nickname === 'Late' || m.nickname === 'Later'), false);
 });
 
+await test('leave: annual before it starts, sick from today, never backdated', async () => {
+  await setNow('2026-11-23T02:00:00Z'); // Mon 23 Nov, 1 pm in Melbourne
+  await fails(call(rad, 'request_leave', { p_kind: 'annual', p_start: '2026-11-23', p_end: '2026-11-29' }), /tomorrow or later/);
+  await fails(call(rad, 'request_leave', { p_kind: 'sick', p_start: '2026-11-22', p_end: '2026-11-25' }), /backdated/);
+  await fails(call(rad, 'request_leave', { p_kind: 'sick', p_start: '2026-11-25', p_end: '2026-11-24' }), /before the first day/);
+  // Three days of sick leave is under the 4 days needed, so the week still counts.
+  let l = await call(rad, 'request_leave', { p_kind: 'sick', p_start: '2026-11-23', p_end: '2026-11-25', p_note: 'Flu' });
+  assert.equal(l.this_week.days, 3);
+  assert.equal(l.this_week.on_leave, false);
+  assert.equal(l.leaves[0].status, 'approved');
+  await fails(call(rad, 'request_leave', { p_kind: 'sick', p_start: '2026-11-25', p_end: '2026-11-27' }), /already have leave/);
+  // Ending it today, then taking the rest of the week, makes it a leave week.
+  l = await call(rad, 'cancel_leave', { p_id: l.leaves[0].id });
+  assert.equal(l.leaves[0].end_date, '2026-11-23');
+  l = await call(rad, 'request_leave', { p_kind: 'sick', p_start: '2026-11-24', p_end: '2026-11-29' });
+  assert.equal(l.this_week.days, 7);
+  assert.equal(l.this_week.on_leave, true);
+  assert.equal((await call(khov, 'get_group')).members.find((x) => x.nickname === 'Rad').on_leave, true);
+  // Annual leave next week, requested ahead, is approved on the spot.
+  const g = await call(gilly, 'request_leave', { p_kind: 'annual', p_start: '2026-11-30', p_end: '2026-12-06', p_note: 'Bali' });
+  assert.equal(g.next_week.on_leave, true);
+  assert.equal(g.leaves[0].status, 'approved');
+  // Someone on leave can save a week with no goals and no reason.
+  const w = await call(gilly, 'save_goals', { p_week: '2026-11-30', p_goals: [] });
+  assert.equal(w.on_leave, true);
+  // An upcoming leave can be cancelled outright.
+  const gone = await call(gilly, 'cancel_leave', { p_id: g.leaves[0].id });
+  assert.equal(gone.leaves.length, 0);
+  await call(gilly, 'request_leave', { p_kind: 'annual', p_start: '2026-11-30', p_end: '2026-12-06' });
+});
+
+await test('leave: sick leave over a week needs the Executive for the extra days', async () => {
+  const l = await call(dija, 'request_leave', { p_kind: 'sick', p_start: '2026-11-23', p_end: '2026-12-13', p_note: 'Broken ankle' });
+  assert.equal(l.leaves[0].status, 'pending');
+  assert.equal(l.leaves[0].approved_until, '2026-11-29'); // the first 7 days stand
+  assert.equal(l.this_week.on_leave, true);
+  assert.equal(l.next_week.on_leave, false);
+  await fails(call(rad, 'decide_leave', { p_id: l.leaves[0].id, p_approve: true }), /Executive/);
+  const pending = (await call(khov, 'get_leave')).pending;
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].nickname, 'Dija');
+  await call(khov, 'decide_leave', { p_id: l.leaves[0].id, p_approve: true });
+  const after = await call(dija, 'get_leave');
+  assert.equal(after.leaves[0].status, 'approved');
+  assert.equal(after.next_week.on_leave, true);
+  await fails(call(khov, 'decide_leave', { p_id: l.leaves[0].id, p_approve: false }), /already been decided/);
+  // The Executive cannot decide their own leave.
+  const mine = await call(khov, 'request_leave', { p_kind: 'sick', p_start: '2026-12-14', p_end: '2026-12-31' });
+  await fails(call(khov, 'decide_leave', { p_id: mine.leaves[0].id, p_approve: true }), /your own leave/);
+  await call(gilly, 'decide_leave', { p_id: mine.leaves[0].id, p_approve: false });
+  const declined = await call(khov, 'get_leave');
+  assert.equal(declined.leaves[0].status, 'declined');
+  assert.equal(declined.leaves[0].approved_until, '2026-12-20');
+});
+
+await test('leave weeks: no forfeit, streak kept, and fewer Eligible Members', async () => {
+  await setNow('2026-11-30T02:00:00Z'); // the Monday after
+  const k = await call(khov, 'get_kitty');
+  const missed = k.misses.filter((x) => x.week_start === '2026-11-23').map((x) => x.nickname).sort();
+  assert.equal(missed.includes('Rad'), false); // on leave
+  assert.equal(missed.includes('Dija'), false); // on leave
+  assert.equal(missed.includes('Khov'), true); // declared nothing, not on leave
+  // 6 active eligible members, 2 on leave that week: the forfeit is 2.50 x 4.
+  const row = k.misses.find((x) => x.week_start === '2026-11-23' && x.nickname === 'Khov');
+  assert.equal(row.amount, 10);
+  await fails(call(khov, 'issue_forfeit', { p_user: rad, p_week: '2026-11-23' }), /on leave that week/);
+  const k2 = await call(gilly, 'issue_forfeit', { p_user: khov, p_week: '2026-11-23' });
+  assert.equal(k2.entries.find((e) => e.nickname === 'Khov' && e.week_start === '2026-11-23').amount, 10);
+  // The Executive can change how many days make a leave week.
+  await fails(call(khov, 'update_settings', { p_patch: { leave_min_days: 0 } }), /between 1 and 7/);
+  await call(khov, 'update_settings', { p_patch: { leave_min_days: 7 } });
+  assert.equal((await call(dija, 'get_week', { p_week: '2026-11-23' })).on_leave, true);
+  await call(khov, 'update_settings', { p_patch: { leave_min_days: 4 } });
+});
+
 await test('photo storage: own folder only, members only', async () => {
   await asUser(khov, `insert into storage.objects (bucket_id, name) values ('proof', '${khov}/z.jpg')`);
   await fails(asUser(khov, `insert into storage.objects (bucket_id, name) values ('proof', '${rad}/z.jpg')`), /row-level security/);

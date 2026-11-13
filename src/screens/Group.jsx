@@ -32,10 +32,11 @@ export default function Group({ state }) {
                   <span className="row wrap" style={{ gap: 8 }}>
                     <span className="name" style={{ fontSize: 15 }}>{m.nickname}</span>
                     {m.is_me ? <span className="badge you">You</span> : null}
+                    {m.on_leave ? <span className="badge quiet">On leave</span> : null}
                     {m.flags > 0 ? <span className="badge flag">{m.flags} flagged</span> : null}
                   </span>
                   {m.title ? <span className="tiny muted">{m.title}</span> : null}
-                  {m.total === 0 ? <span className="tiny muted">Nothing declared</span> : null}
+                  {m.total === 0 && !m.on_leave ? <span className="tiny muted">Nothing declared</span> : null}
                 </span>
                 <span className="done-col">
                   <span>{m.done} / {m.total}</span>
