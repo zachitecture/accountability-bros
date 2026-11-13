@@ -1,12 +1,13 @@
 // Photo handling: shrink what the camera gives us, and draw the stamped image.
 import { fmtDuration, fmtStamp } from './format.js';
 
-const NAVY = '#0B1430';
-const GOLD = '#F2C230';
-const TEXT = '#F3F5FB';
-const TEXT_2 = '#C6CCE0';
-const MUTED = '#98A2C3';
-const CORAL = '#FF8F73';
+// The stamp keeps a dark band so it stands out on any photo in the chat.
+const BAND = '#1F3326';
+const POP = '#F0683F'; // tally and top rule
+const TEXT = '#F6F5F0';
+const TEXT_2 = '#CBD5C7';
+const MUTED = '#A5B2A1';
+const FLAG = '#C9431F';
 
 function loadImage(blob) {
   return new Promise((resolve, reject) => {
@@ -78,7 +79,7 @@ function roundedPath(ctx, x, y, w, h, r) {
 export async function makeStamp(photoBlob, log, selfieBlob = null) {
   const W = 1080;
   const H = 1350;
-  const BAND = 310;
+  const BAND_H = 310;
   try {
     await Promise.all([
       document.fonts.load('700 96px "Space Grotesk"'),
@@ -91,9 +92,9 @@ export async function makeStamp(photoBlob, log, selfieBlob = null) {
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d');
-  const photoH = H - BAND;
+  const photoH = H - BAND_H;
 
-  ctx.fillStyle = NAVY;
+  ctx.fillStyle = BAND;
   ctx.fillRect(0, 0, W, H);
   drawCover(ctx, img, 0, 0, W, photoH);
 
@@ -101,7 +102,7 @@ export async function makeStamp(photoBlob, log, selfieBlob = null) {
     const selfie = await loadImage(selfieBlob);
     const x = 40; const y = 112; const w = 300; const h = 400; const r = 34; const edge = 8;
     roundedPath(ctx, x - edge, y - edge, w + edge * 2, h + edge * 2, r + edge);
-    ctx.fillStyle = NAVY;
+    ctx.fillStyle = BAND;
     ctx.fill();
     ctx.save();
     roundedPath(ctx, x, y, w, h, r);
@@ -112,28 +113,28 @@ export async function makeStamp(photoBlob, log, selfieBlob = null) {
 
   // Group name, top left. Any flags, top right.
   if ('letterSpacing' in ctx) ctx.letterSpacing = '3px';
-  pill(ctx, String(log.group_name || 'Accountability Bros').toUpperCase(), 40, 40, { bg: NAVY, fg: TEXT, font: '700 26px "Inter", system-ui, sans-serif' });
+  pill(ctx, String(log.group_name || 'Accountability Bros').toUpperCase(), 40, 40, { bg: BAND, fg: TEXT, font: '700 26px "Inter", system-ui, sans-serif' });
   if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
   let flagY = 40;
   if (log.flag_short) {
-    pill(ctx, `Under the ${log.min_physical_minutes} min minimum`, W - 40, flagY, { bg: CORAL, fg: NAVY, font: '700 26px "Inter", system-ui, sans-serif', alignRight: true });
+    pill(ctx, `Under the ${log.min_physical_minutes} min minimum`, W - 40, flagY, { bg: FLAG, fg: TEXT, font: '700 26px "Inter", system-ui, sans-serif', alignRight: true });
     flagY += 64;
   }
   if (log.flag_same_day) {
-    pill(ctx, 'Second of the same today', W - 40, flagY, { bg: CORAL, fg: NAVY, font: '700 26px "Inter", system-ui, sans-serif', alignRight: true });
+    pill(ctx, 'Second of the same today', W - 40, flagY, { bg: FLAG, fg: TEXT, font: '700 26px "Inter", system-ui, sans-serif', alignRight: true });
   }
 
   // The band.
-  ctx.fillStyle = NAVY;
-  ctx.fillRect(0, photoH, W, BAND);
-  ctx.fillStyle = GOLD;
+  ctx.fillStyle = BAND;
+  ctx.fillRect(0, photoH, W, BAND_H);
+  ctx.fillStyle = POP;
   ctx.fillRect(0, photoH, W, 8);
 
   const tally = `${log.done}/${log.total}`;
   ctx.font = '700 176px "Space Grotesk", "Inter", system-ui, sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = GOLD;
+  ctx.fillStyle = POP;
   ctx.fillText(tally, W - 52, H - 62);
   const tallyW = ctx.measureText(tally).width;
   const leftMax = W - 52 - tallyW - 52 - 40;
