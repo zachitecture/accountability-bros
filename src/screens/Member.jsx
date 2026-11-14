@@ -64,6 +64,7 @@ export default function Member({ state, userId }) {
             ))}
             {d.reason ? <div className="card"><div className="label">Reason for a lighter week</div><div className="small soft">{d.reason}</div></div> : null}
             {state.me.is_admin && !d.is_me ? <a className="btn" href={`#/goals/${userId}/${d.week_start}`}>Change {d.nickname}'s goals</a> : null}
+            {!d.is_me && d.goals.length > 0 ? <a className="link-btn" style={{ alignSelf: 'flex-start' }} href={`#/dispute/new/goals/${userId}:${d.week_start}`}>Dispute these goals</a> : null}
           </div>
 
           <div className="stack">
@@ -76,11 +77,15 @@ export default function Member({ state, userId }) {
                 <div className="stack grow" style={{ gap: 4 }}>
                   <div className="name" style={{ fontSize: 15 }}>{l.activity} · {fmtDuration(l.duration_min)}</div>
                   <div className="sub">{fmtDayTime(l.logged_at, d.timezone)}</div>
+                  {l.note ? <div className="small soft note-text">{l.note}<span className="tiny muted"> · only you see this</span></div> : null}
                   <div className="row wrap" style={{ gap: 6 }}>
                     {l.flag_short ? <span className="badge flag">Under {state.settings.min_physical_minutes} min</span> : null}
                     {l.flag_same_day ? <span className="badge flag">Second that day</span> : null}
                   </div>
-                  {l.can_undo ? <button type="button" className="link-btn" style={{ alignSelf: 'flex-start' }} onClick={() => undo(l)}>{d.is_me ? 'Undo' : 'Remove entry'}</button> : null}
+                  <div className="row" style={{ gap: 16 }}>
+                    {l.can_undo ? <button type="button" className="link-btn" onClick={() => undo(l)}>{d.is_me ? 'Undo' : 'Remove entry'}</button> : null}
+                    {d.is_me || new Date(state.now).getTime() - new Date(l.logged_at).getTime() > state.settings.dispute_days * 86400000 ? null : <a className="link-btn" href={`#/dispute/new/log/${l.id}`}>Dispute</a>}
+                  </div>
                 </div>
               </div>
             ))}

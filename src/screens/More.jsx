@@ -40,6 +40,7 @@ function MemberEditor({ m, onSaved }) {
   const [f, setF] = useState({
     nickname: m.nickname, title: m.title, sort_order: m.sort_order ?? '', timezone: m.timezone,
     eligible: m.eligible, can_manage_kitty: m.can_manage_kitty, is_admin: m.is_admin, active: m.active,
+    is_ombudsman: Boolean(m.is_ombudsman), is_attorney: Boolean(m.is_attorney),
   });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -67,7 +68,9 @@ function MemberEditor({ m, onSaved }) {
       <div className="field"><label className="label" htmlFor={id('tz')}>Time zone</label><input id={id('tz')} className="input" value={f.timezone} onChange={set('timezone')} /><div className="tiny muted">For example Australia/Melbourne or Europe/London.</div></div>
       <label className="check"><input type="checkbox" checked={f.eligible} onChange={set('eligible')} />Eligible Member (counts toward the forfeit amount)</label>
       <label className="check"><input type="checkbox" checked={f.can_manage_kitty} onChange={set('can_manage_kitty')} />Kitty manager (can issue forfeits and mark paid)</label>
-      <label className="check"><input type="checkbox" checked={f.is_admin} onChange={set('is_admin')} />Admin (Executive: members, rules, fixing goals)</label>
+      <label className="check"><input type="checkbox" checked={f.is_admin} onChange={set('is_admin')} />Admin (Executive: members, rules, fixing goals, deciding disputes)</label>
+      <label className="check"><input type="checkbox" checked={f.is_ombudsman} onChange={set('is_ombudsman')} />Ombudsman (advises on and looks into disputes)</label>
+      <label className="check"><input type="checkbox" checked={f.is_attorney} onChange={set('is_attorney')} />Attorney-General (can lodge a dispute without a seconder)</label>
       <label className="check"><input type="checkbox" checked={f.active} onChange={set('active')} />Active (untick to pause their membership)</label>
       <ErrorNote>{error}</ErrorNote>
       <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Saving…' : `Save ${m.nickname}`}</button>
@@ -89,7 +92,7 @@ function Members({ refresh }) {
             aria-expanded={openId === m.id} onClick={() => setOpenId(openId === m.id ? null : m.id)}>
             <span className="stack" style={{ gap: 3 }}>
               <span className="name" style={{ fontSize: 15 }}>{m.nickname}{m.active ? '' : ' (paused)'}</span>
-              <span className="tiny muted">{[m.title, m.is_admin ? 'Admin' : '', m.can_manage_kitty ? 'Kitty' : '', m.eligible ? '' : 'Not eligible'].filter(Boolean).join(' · ') || 'Member'}</span>
+              <span className="tiny muted">{[m.title, m.is_admin ? 'Admin' : '', m.can_manage_kitty ? 'Kitty' : '', m.is_ombudsman ? 'Ombudsman' : '', m.is_attorney ? 'Attorney-General' : '', m.eligible ? '' : 'Not eligible'].filter(Boolean).join(' · ') || 'Member'}</span>
               <span className="tiny muted">{m.email}</span>
             </span>
             <span className="small gold">{openId === m.id ? 'Close' : 'Edit'}</span>
@@ -120,6 +123,7 @@ function Rules({ refresh }) {
         group_name: f.group_name, min_goals: Number(f.min_goals), min_physical_minutes: Number(f.min_physical_minutes),
         forfeit_per_member: Number(f.forfeit_per_member), forfeit_due_days: Number(f.forfeit_due_days), join_code: f.join_code,
         first_week_grace: Boolean(f.first_week_grace), leave_min_days: Number(f.leave_min_days),
+        dispute_fee: Number(f.dispute_fee), dispute_days: Number(f.dispute_days),
       } });
       load.setData(s);
       setSaved(true);
@@ -141,6 +145,8 @@ function Rules({ refresh }) {
       <div className="field"><label className="label" htmlFor="r-forfeit">Forfeit per Eligible Member ($)</label><input id="r-forfeit" className="input" inputMode="decimal" value={f.forfeit_per_member} onChange={set('forfeit_per_member')} /></div>
       <div className="field"><label className="label" htmlFor="r-days">Days to pay</label><input id="r-days" className="input" inputMode="numeric" value={f.forfeit_due_days} onChange={set('forfeit_due_days')} /></div>
       <div className="field"><label className="label" htmlFor="r-leave">Days of leave needed for a week to count as a leave week (1 to 7)</label><input id="r-leave" className="input" inputMode="numeric" value={f.leave_min_days ?? ''} onChange={set('leave_min_days')} /></div>
+      <div className="field"><label className="label" htmlFor="r-dfee">Dispute handling fee ($)</label><input id="r-dfee" className="input" inputMode="decimal" value={f.dispute_fee ?? ''} onChange={set('dispute_fee')} /></div>
+      <div className="field"><label className="label" htmlFor="r-ddays">Days to lodge a dispute</label><input id="r-ddays" className="input" inputMode="numeric" value={f.dispute_days ?? ''} onChange={set('dispute_days')} /></div>
       <label className="check">
         <input type="checkbox" checked={Boolean(f.first_week_grace)} onChange={(e) => { setF({ ...f, first_week_grace: e.target.checked }); setSaved(false); }} />
         New members can set goals for the week they join (for 24 hours after joining)
@@ -197,6 +203,7 @@ export default function More({ state, email, onState, refresh }) {
       <Head eyebrow={state.settings.group_name} title="More" />
       <Profile state={state} email={email} onState={onState} />
       <a className="btn" href="#/leave">Sick, injured or away? Take leave</a>
+      <a className="btn" href="#/disputes">Disputes</a>
       {state.me.is_admin ? (
         <>
           <LeaveApprovals />

@@ -169,6 +169,10 @@ try {
   await page.getByRole('link', { name: 'Declare this week' }).click();
   await page.getByRole('heading', { name: 'Declare your week' }).waitFor();
   await page.getByText('Locks Monday at 11:59 pm').waitFor();
+  // Last week's goals carried over; start this week from scratch instead.
+  await page.getByText('Carried over from last week.', { exact: false }).first().waitFor();
+  const clearRows = async () => { while (await page.locator('.goal-edit').count()) await page.locator('.goal-edit').first().getByRole('button', { name: /^Remove/ }).click(); };
+  await clearRows();
   await page.getByRole('button', { name: 'Gym', exact: true }).click();
   for (let i = 0; i < 3; i += 1) await page.getByRole('button', { name: 'One more Gym' }).click();
   await page.getByRole('button', { name: 'Soccer training', exact: true }).click();
@@ -184,6 +188,8 @@ try {
   // Under the minimum without a reason is refused.
   await page.getByRole('button', { name: 'Next week' }).click();
   await page.getByText('Locks Mon 16 Nov at 11:59 pm').waitFor();
+  await page.getByText('They carry over automatically when the week starts').waitFor();
+  await clearRows();
   await page.getByRole('button', { name: 'Walk', exact: true }).click();
   await page.getByRole('button', { name: 'Save 1 goal' }).click();
   await page.getByText('under the minimum of 3').waitFor();
@@ -202,6 +208,9 @@ try {
   await fake.setNow(TUE_614PM);
   await page.goto(`${APP}/#/goals`);
   await page.reload();
+  await page.getByText('They carry over automatically when the week starts').waitFor(); // next week: this week's goals, ready to carry
+  assert.equal(await page.locator('.goal-edit').count(), 3); // Gym, Soccer training, Run
+  await shot(page, 'goals-next-week-carry');
   await page.getByRole('button', { name: 'This week' }).click();
   await page.getByText('Locked since Monday 11:59 pm').waitFor();
   assert.equal(await page.getByRole('button', { name: /Save/ }).count(), 0);
@@ -221,6 +230,7 @@ try {
   await page.getByText('Photo added').waitFor();
   await page.setInputFiles('input[aria-label="Take a selfie"]', selfiePath);
   await page.getByText('Selfie added').waitFor();
+  await page.getByLabel('Note (optional, only you see it)').fill('Bench 80 kg x 5');
   await shot(page, 'log');
   await page.getByRole('button', { name: /Stamp it/ }).click();
   await page.getByRole('heading', { name: 'Your stamp' }).waitFor();
@@ -287,9 +297,20 @@ try {
   await shot(page, 'group');
   ok('group lists all 14 with tallies and streaks');
 
+  await page.getByRole('button', { name: 'Leaderboard' }).click();
+  const khovRow = page.locator('a.member', { hasText: 'Khov' });
+  await khovRow.getByText('3 h 23 min').waitFor(); // 61 + 90 + 52 minutes of physical sessions
+  await shot(page, 'leaderboard');
+  await page.getByRole('button', { name: 'All time' }).click();
+  await page.locator('a.member').first().waitFor();
+  assert.equal(await page.locator('a.member').count(), 14);
+  await page.getByRole('button', { name: 'Tallies' }).click();
+  ok('leaderboard: most hours this week and all time');
+
   await mine.click();
   await page.getByRole('heading', { name: 'Khov' }).waitFor();
   await page.getByText('Gym · 52 min').waitFor();
+  await page.getByText('Bench 80 kg x 5').waitFor(); // private note, shown only to Khov
   await page.waitForFunction(() => document.querySelectorAll('.thumb img').length >= 1);
   await shot(page, 'member');
   await page.getByRole('button', { name: 'Previous week' }).click();
@@ -378,6 +399,8 @@ try {
   await p2.locator('a.member', { hasText: 'Khov' }).click();
   await p2.getByText('Gym · 52 min').waitFor();
   assert.equal(await p2.getByRole('button', { name: /Undo|Remove entry/ }).count(), 0);
+  assert.equal(await p2.getByText('Bench 80 kg x 5').count(), 0); // Khov's note is private
+  assert.ok(await p2.getByRole('link', { name: 'Dispute', exact: true }).count() > 0);
   ok('new member: join code enforced, no admin or Kitty controls');
 
   // ---- leave: 10 days of sick leave from today (Tue 10 Nov). The first 7 stand, the Executive decides the rest.
@@ -422,6 +445,59 @@ try {
   await p2.getByRole('button', { name: 'End leave today' }).click();
   await p2.getByText('You are on leave next week.').waitFor({ state: 'detached' });
   ok('leave: the Executive approves the rest; leave can be ended early');
+
+  // ---- disputes: Newbie drafts, asks the Ombudsman, lodges ($15), and the Executive upholds it (fee waived)
+  await page.goto(`${APP}/#/more`);
+  await page.getByRole('button', { name: /khov@example\.com/ }).click();
+  await page.getByLabel('Ombudsman (advises on and looks into disputes)').check();
+  await page.getByRole('button', { name: 'Save Khov' }).click();
+  await page.getByRole('button', { name: /Ombudsman[\s\S]*khov@example\.com/ }).waitFor();
+  await p2.goto(`${APP}/#/disputes`);
+  await p2.reload();
+  await p2.getByRole('heading', { name: 'Disputes' }).waitFor();
+  await p2.getByRole('button', { name: 'Dispute something else' }).click();
+  await p2.getByRole('heading', { name: 'Draft' }).waitFor();
+  assert.equal(await p2.getByLabel('I\'m directly affected').isChecked(), true);
+  await p2.getByLabel('2. Grounds of dispute').fill('The forfeit for the group dinner should be shared, not mine alone.');
+  await shot(p2, 'dispute-draft');
+  await p2.getByRole('button', { name: 'Ask the Ombudsman first (no fee)' }).click();
+  await p2.getByRole('heading', { name: 'With the Ombudsman' }).waitFor();
+  await page.goto(`${APP}/#/disputes`);
+  await page.reload();
+  await page.getByText('Give advice').click();
+  await page.getByLabel('Your advice (only the member who asked sees it)').fill('Worth lodging. Get a seconder from the dinner.');
+  await page.getByRole('button', { name: 'Send advice' }).click();
+  await page.getByRole('heading', { name: 'Draft' }).waitFor();
+  await p2.reload();
+  await p2.getByText('Worth lodging. Get a seconder from the dinner.').waitFor();
+  await shot(p2, 'dispute-advice');
+  await p2.getByRole('button', { name: 'Lodge dispute · $15' }).click();
+  await p2.getByRole('heading', { name: 'Open', exact: true }).waitFor();
+  await p2.getByText('$15 owed').waitFor();
+  await shot(p2, 'dispute-open');
+  ok('disputes: draft, Ombudsman advice, lodged with the $15 fee');
+
+  await page.goto(`${APP}/#/disputes`);
+  await page.reload();
+  await page.getByText('Decide', { exact: true }).click();
+  await page.getByLabel('Decision (reason)').fill('Upheld. Split it across the table.');
+  await page.getByRole('button', { name: 'Uphold' }).click();
+  await page.getByRole('heading', { name: 'Upheld' }).waitFor();
+  await page.getByText('$15 waived').waitFor();
+  await shot(page, 'dispute-upheld');
+  await page.goto(`${APP}/#/kitty`);
+  await page.reload();
+  await page.locator('.card', { hasText: 'Newbie' }).getByText('Waived after a dispute').waitFor();
+  ok('disputes: the Executive upholds it and the fee is waived');
+
+  // ---- next Monday: last week's goals have carried over
+  await fake.setNow('2026-11-15T23:00:00Z'); // Mon 16 Nov 10 am in Melbourne
+  await page.goto(`${APP}/#/goals`);
+  await page.reload();
+  await page.getByText('Carried over from last week.', { exact: false }).first().waitFor();
+  assert.equal(await page.locator('.goal-edit').count(), 3);
+  await shot(page, 'goals-carried');
+  ok('goals carry over to the next week');
 
   assert.deepEqual(problems, []);
   console.log('\nAll app checks passed.');

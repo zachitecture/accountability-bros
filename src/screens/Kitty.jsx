@@ -10,7 +10,8 @@ function describe(e) {
   return e.kind === 'forfeit' && e.note ? `${base} · ${e.note}` : base;
 }
 
-export default function Kitty() {
+export default function Kitty({ state }) {
+  const windowMs = state.settings.dispute_days * 86400000;
   const load = useLoad(() => rpc('get_kitty'), []);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -41,7 +42,7 @@ export default function Kitty() {
 
   return (
     <main className="screen">
-      <Head eyebrow="Held by the Treasurer" title="The Kitty" />
+      <Head eyebrow="Held by the Treasurer" title="The Kitty" side={<a className="small" href="#/disputes">Disputes</a>} />
       {load.loading && !k ? <Loading /> : null}
       <ErrorNote onRetry={load.reload}>{load.error}</ErrorNote>
 
@@ -95,7 +96,7 @@ export default function Kitty() {
             <div className="label">Forfeits and fees</div>
             {k.entries.length === 0 ? <div className="card sub">Nothing in the ledger yet.</div> : null}
             {k.entries.map((e) => (
-              <div key={e.id} className={`card stack${e.status === 'owed' ? ' owed' : ''}`}>
+              <div key={e.id} className={`card stack${e.status === 'owed' ? ' owed' : ''}${e.status === 'waived' ? ' waived' : ''}`}>
                 <div className="row between" style={{ alignItems: 'flex-start' }}>
                   <div className="stack" style={{ gap: 3 }}>
                     <span className="name" style={{ fontSize: 15 }}>{e.nickname}</span>
@@ -103,7 +104,11 @@ export default function Kitty() {
                   </div>
                   <span className="amount">{money(e.amount)}</span>
                 </div>
-                {e.status === 'owed' ? (
+                {e.status === 'waived' ? (
+                  <div className="row small soft" style={{ gap: 6 }}>
+                    <Icon name="check" size={14} color="var(--accent)" width={2.8} />Waived after a dispute{e.paid_at ? '. It was already paid, so refund it.' : ''}
+                  </div>
+                ) : e.status === 'owed' ? (
                   <div className="row small warn" style={{ gap: 6, fontWeight: 600 }}>
                     <Icon name="clock" size={16} color="var(--warn)" />Owed{e.due_date ? `, due ${fmtDate(e.due_date, false)}` : ''}
                   </div>
@@ -112,7 +117,10 @@ export default function Kitty() {
                     <Icon name="check" size={14} color="var(--accent)" width={2.800} />Paid {e.paid_at ? fmtDate(e.paid_at.slice(0, 10), false) : ''}
                   </div>
                 )}
-                {k.can_manage ? (
+                {e.dispute_id
+                  ? <a className="link-btn" style={{ alignSelf: 'flex-start' }} href={`#/dispute/${e.dispute_id}`}>See the dispute</a>
+                  : e.status !== 'waived' && !/^Dispute/.test(e.note) && new Date(state.now).getTime() - new Date(e.created_at).getTime() < windowMs ? <a className="link-btn" style={{ alignSelf: 'flex-start' }} href={`#/dispute/new/forfeit/${e.id}`}>Dispute</a> : null}
+                {k.can_manage && e.status !== 'waived' ? (
                   e.is_mine ? <div className="tiny muted">Another Kitty manager has to mark your own entry.</div> : (
                     <div className="actions">
                       {e.status === 'owed'

@@ -52,6 +52,7 @@ export default function Goals({ state, userId, week: fixedWeek }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [preview, setPreview] = useState(false); // next week, nothing saved: showing what will carry over
   const nextKey = useRef(1);
   const data = load.data;
 
@@ -61,6 +62,18 @@ export default function Goals({ state, userId, week: fixedWeek }) {
     setReason(data.reason || '');
     setShowReason(Boolean(data.reason));
     setError('');
+    setPreview(false);
+    // Next week with nothing saved yet: show this week's goals, which carry over automatically.
+    if (!forOther && !fixedWeek && data.goals.length === 0 && data.week_start === addDays(state.week_start, 7)) {
+      let live = true;
+      rpc('get_week', { p_week: state.week_start }).then((prev) => {
+        if (!live || prev.goals.length === 0) return;
+        setRows(prev.goals.map((g) => ({ key: `new-${nextKey.current++}`, activity: g.activity, category: g.category, target: g.target, done: 0 })));
+        setPreview(true);
+      }).catch(() => {});
+      return () => { live = false; };
+    }
+    return undefined;
   }, [data]);
 
   const min = state.settings.min_goals;
@@ -142,6 +155,17 @@ export default function Goals({ state, userId, week: fixedWeek }) {
             <Icon name={canEdit && !forOther ? 'clock' : 'lock'} size={16} />
             <span>{forOther ? 'Changing this as the Executive. It applies even after the lock.' : lockText}</span>
           </div>
+
+          {canEdit && !forOther && preview ? (
+            <div className="notice good" role="status">
+              These are this week's goals. They carry over automatically when the week starts, so you only need to save if you want something different.
+            </div>
+          ) : null}
+          {canEdit && !forOther && data.carried ? (
+            <div className="notice good" role="status">
+              Carried over from last week. Nothing to do unless you want something different: change them before the lock.
+            </div>
+          ) : null}
 
           {canEdit ? (
             <>

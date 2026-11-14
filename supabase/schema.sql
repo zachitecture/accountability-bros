@@ -25,6 +25,9 @@ insert into public.settings (id) values (1) on conflict (id) do nothing;
 alter table public.settings add column if not exists first_week_grace boolean not null default true;
 -- A week counts as a leave week when approved leave covers at least this many of its days.
 alter table public.settings add column if not exists leave_min_days int not null default 4;
+-- Clause 13: the handling fee for lodging a dispute, and how many days there are to lodge one.
+alter table public.settings add column if not exists dispute_fee numeric(10,2) not null default 15;
+alter table public.settings add column if not exists dispute_days int not null default 7;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
@@ -38,6 +41,10 @@ create table if not exists public.profiles (
   sort_order int,
   joined_at timestamptz not null default now()
 );
+-- Offices the app gives powers to: the Ombudsman advises on and inquires into disputes,
+-- and the Attorney-General can lodge a dispute without a seconder.
+alter table public.profiles add column if not exists is_ombudsman boolean not null default false;
+alter table public.profiles add column if not exists is_attorney boolean not null default false;
 
 create table if not exists public.goals (
   id uuid primary key default gen_random_uuid(),
@@ -50,6 +57,8 @@ create table if not exists public.goals (
   created_at timestamptz not null default now()
 );
 create index if not exists goals_user_week on public.goals (user_id, week_start);
+-- True when the app copied the goals over from the week before (see roll_goals).
+alter table public.goals add column if not exists carried boolean not null default false;
 
 create table if not exists public.week_notes (
   user_id uuid not null references public.profiles (id) on delete cascade,
@@ -71,6 +80,8 @@ create table if not exists public.logs (
   logged_at timestamptz not null default now()
 );
 create index if not exists logs_user_week on public.logs (user_id, week_start);
+-- A private note: only the member who logged the session ever sees it. Never on the stamp.
+alter table public.logs add column if not exists note text not null default '';
 create index if not exists logs_goal on public.logs (goal_id);
 
 create table if not exists public.ledger (
@@ -87,6 +98,9 @@ create table if not exists public.ledger (
   paid_at timestamptz,
   paid_marked_by uuid references public.profiles (id) on delete set null
 );
+-- 'waived' = cancelled after a successful dispute (refund it if it was already paid).
+alter table public.ledger drop constraint if exists ledger_status_check;
+alter table public.ledger add constraint ledger_status_check check (status in ('owed', 'paid', 'waived'));
 create unique index if not exists ledger_one_forfeit_per_week
   on public.ledger (user_id, week_start) where kind = 'forfeit';
 
@@ -120,6 +134,48 @@ create table if not exists public.leave_requests (
 create index if not exists leave_requests_user on public.leave_requests (user_id, start_date);
 alter table public.leave_requests enable row level security;
 revoke all on table public.leave_requests from anon, authenticated;
+
+-- Notices of Dispute under Clause 13.
+--   draft      being written; only the member writing it can see it
+--   advice     a draft sent to the Ombudsman for advice before lodging
+--   seconding  lodged, waiting for the chosen member to second it
+--   open       lodged (and seconded if needed); the fee is owed; the Ombudsman inquires
+--   upheld / dismissed / withdrawn   closed
+create table if not exists public.disputes (
+  id uuid primary key default gen_random_uuid(),
+  lodger uuid not null references public.profiles (id) on delete cascade,
+  kind text not null check (kind in ('forfeit', 'log', 'goals', 'other')),
+  ledger_id uuid references public.ledger (id) on delete set null,
+  log_id uuid references public.logs (id) on delete set null,
+  goals_week date,
+  subject_user uuid references public.profiles (id) on delete set null,
+  subject_label text not null default '',
+  ref_at timestamptz,
+  standing text not null default 'affected' check (standing in ('affected', 'seconded', 'attorney')),
+  grounds text not null default '',
+  evidence text not null default '',
+  evidence_paths text[] not null default '{}',
+  status text not null default 'draft' check (status in ('draft', 'advice', 'seconding', 'open', 'upheld', 'dismissed', 'withdrawn')),
+  seconder uuid references public.profiles (id) on delete set null,
+  seconded_at timestamptz,
+  seconder_declined text not null default '',
+  advice text not null default '',
+  advice_by uuid references public.profiles (id) on delete set null,
+  advice_at timestamptz,
+  findings text not null default '',
+  findings_by uuid references public.profiles (id) on delete set null,
+  findings_at timestamptz,
+  decision text not null default '',
+  decided_by uuid references public.profiles (id) on delete set null,
+  decided_at timestamptz,
+  fee_entry uuid references public.ledger (id) on delete set null,
+  lodged_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists disputes_lodger on public.disputes (lodger);
+alter table public.disputes enable row level security;
+revoke all on table public.disputes from anon, authenticated;
 
 alter table public.settings enable row level security;
 alter table public.profiles enable row level security;
@@ -253,6 +309,26 @@ begin
   return null;
 end $$;
 
+-- Goals carry over: when a member's week starts with nothing declared, last week's
+-- goals (the most recent week with any, up to 8 weeks back) are copied in. The
+-- member can still change them until the Monday lock. Runs whenever the app asks
+-- for the state of the week, so whoever opens the app first each week sets it up.
+create or replace function public.roll_goals() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('accountability-bros roll_goals'));
+  insert into public.goals (user_id, week_start, activity, category, target, position, created_at, carried)
+  select p.id, w.wk, g.activity, g.category, g.target, g.position, public.app_now(), true
+  from public.profiles p
+  cross join lateral (select public.week_of(p.timezone) as wk) w
+  cross join lateral (
+    select max(g2.week_start) as src from public.goals g2
+    where g2.user_id = p.id and g2.week_start < w.wk and g2.week_start >= w.wk - 56) src
+  join public.goals g on g.user_id = p.id and g.week_start = src.src
+  where p.active
+    and not exists (select 1 from public.goals g3 where g3.user_id = p.id and g3.week_start = w.wk);
+end $$;
+
 -- ------------------------------------------------------- joining & state ---
 
 create or replace function public.get_state() returns jsonb
@@ -270,6 +346,7 @@ begin
   if not p.active then
     return jsonb_build_object('member', false, 'paused', true);
   end if;
+  perform public.roll_goals();
   select * into s from public.settings where id = 1;
   v_week := public.week_of(p.timezone);
   v_lock := public.lock_at(v_week, p.timezone);
@@ -277,10 +354,11 @@ begin
   return jsonb_build_object(
     'member', true,
     'me', jsonb_build_object('id', p.id, 'nickname', p.nickname, 'title', p.title, 'timezone', p.timezone,
-      'eligible', p.eligible, 'is_admin', p.is_admin, 'can_manage_kitty', p.can_manage_kitty),
+      'eligible', p.eligible, 'is_admin', p.is_admin, 'can_manage_kitty', p.can_manage_kitty,
+      'is_ombudsman', p.is_ombudsman, 'is_attorney', p.is_attorney),
     'settings', jsonb_build_object('group_name', s.group_name, 'min_goals', s.min_goals,
       'min_physical_minutes', s.min_physical_minutes, 'forfeit_per_member', s.forfeit_per_member,
-      'forfeit_due_days', s.forfeit_due_days),
+      'forfeit_due_days', s.forfeit_due_days, 'dispute_fee', s.dispute_fee, 'dispute_days', s.dispute_days),
     'now', v_now, 'week_start', v_week, 'lock_at', v_lock,
     -- "locked" means this member can no longer change this week's goals.
     'locked', v_until is null, 'edit_until', v_until, 'grace', v_until is not null and v_now >= v_lock);
@@ -344,6 +422,7 @@ begin
     select * into t from public.profiles where id = p_user;
     if t.id is null then raise exception 'Member not found.'; end if;
   end if;
+  perform public.roll_goals();
   v_cur := public.week_of(t.timezone);
   v_week := coalesce(p_week, v_cur);
   v_lock := public.lock_at(v_week, t.timezone);
@@ -370,7 +449,8 @@ begin
     'week_start', v_week, 'current_week', v_cur, 'lock_at', v_lock,
     'editable', public.edit_until(t.id, v_week) is not null, 'edit_until', public.edit_until(t.id, v_week),
     'goals', v_goals, 'reason', v_reason, 'history', v_hist,
-    'leave_days', public.leave_days(t.id, v_week), 'on_leave', public.on_leave(t.id, v_week));
+    'leave_days', public.leave_days(t.id, v_week), 'on_leave', public.on_leave(t.id, v_week),
+    'carried', exists (select 1 from public.goals g where g.user_id = t.id and g.week_start = v_week and g.carried));
 end $$;
 
 -- Replace a member's goals for a week. Members can do this for the current week
@@ -422,7 +502,7 @@ begin
     if v_target < 1 or v_target > 14 then raise exception 'Each goal needs a count between 1 and 14.'; end if;
     v_total := v_total + v_target;
     if v_id is not null then
-      update public.goals set activity = v_activity, category = v_category, target = v_target, position = v_pos
+      update public.goals set activity = v_activity, category = v_category, target = v_target, position = v_pos, carried = false
         where id = v_id and user_id = t.id and week_start = p_week;
       if not found then raise exception 'One of those goals no longer exists. Reload and try again.'; end if;
       select count(*) into v_done from public.logs where goal_id = v_id;
@@ -467,7 +547,8 @@ end $$;
 
 -- Record one completed activity. The time is the server's, the week is worked
 -- out from that time, and the entry cannot be edited afterwards.
-create or replace function public.log_activity(p_goal_id uuid, p_duration int, p_photo_path text) returns jsonb
+drop function if exists public.log_activity(uuid, int, text);
+create or replace function public.log_activity(p_goal_id uuid, p_duration int, p_photo_path text, p_note text default '') returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   m public.profiles := public.me();
@@ -475,6 +556,7 @@ declare
   v_cur date; v_done int; v_day date; v_short boolean; v_same boolean;
   v_week_done int; v_week_total int;
 begin
+  perform public.roll_goals();
   select * into s from public.settings where id = 1;
   select * into g from public.goals where id = p_goal_id and user_id = m.id for update;
   if g.id is null then raise exception 'That goal was not found.'; end if;
@@ -498,8 +580,8 @@ begin
   v_short := g.category = 'physical' and p_duration <= s.min_physical_minutes;
   v_same := exists (select 1 from public.logs where goal_id = g.id and local_day = v_day);
 
-  insert into public.logs (user_id, goal_id, week_start, local_day, duration_min, photo_path, flag_short, flag_same_day, logged_at)
-    values (m.id, g.id, v_cur, v_day, p_duration, p_photo_path, v_short, v_same, public.app_now())
+  insert into public.logs (user_id, goal_id, week_start, local_day, duration_min, photo_path, flag_short, flag_same_day, logged_at, note)
+    values (m.id, g.id, v_cur, v_day, p_duration, p_photo_path, v_short, v_same, public.app_now(), left(btrim(coalesce(p_note, '')), 500))
     returning * into v_log;
 
   select coalesce(sum(target), 0) into v_week_total from public.goals where user_id = m.id and week_start = v_cur;
@@ -542,6 +624,7 @@ declare
   m public.profiles := public.me();
   v jsonb;
 begin
+  perform public.roll_goals();
   select coalesce(jsonb_agg(x.j order by x.so nulls last, x.ja), '[]'::jsonb) into v
   from (
     select p.sort_order as so, p.joined_at as ja,
@@ -574,6 +657,7 @@ begin
            'id', l.id, 'activity', g.activity, 'category', g.category, 'duration_min', l.duration_min,
            'logged_at', l.logged_at, 'photo_path', l.photo_path,
            'flag_short', l.flag_short, 'flag_same_day', l.flag_same_day,
+           'note', case when l.user_id = m.id then l.note else '' end,
            'can_undo', (l.user_id = m.id and public.app_now() <= l.logged_at + interval '15 minutes')
                        or (m.is_admin and l.user_id <> m.id))
            order by l.logged_at), '[]'::jsonb)
@@ -597,6 +681,7 @@ declare
   v_elig int; v_in numeric; v_owed numeric;
   v_entries jsonb; v_misses jsonb := '[]'::jsonb; v_members jsonb := '[]'::jsonb;
 begin
+  perform public.roll_goals();
   select * into s from public.settings where id = 1;
   v_elig := public.eligible_count(public.week_of(m.timezone));
   select coalesce(sum(amount) filter (where status = 'paid'), 0),
@@ -606,7 +691,9 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', e.id, 'user_id', e.user_id, 'nickname', p.nickname, 'kind', e.kind, 'week_start', e.week_start,
            'amount', e.amount, 'note', e.note, 'status', e.status, 'due_date', e.due_date,
-           'paid_at', e.paid_at, 'created_at', e.created_at, 'is_mine', e.user_id = m.id)
+           'paid_at', e.paid_at, 'created_at', e.created_at, 'is_mine', e.user_id = m.id,
+           'dispute_id', (select d.id from public.disputes d where (d.ledger_id = e.id or d.fee_entry = e.id)
+                            and d.status not in ('draft', 'advice') order by d.created_at desc limit 1))
            order by (e.status = 'owed') desc, e.created_at desc), '[]'::jsonb)
     into v_entries
     from public.ledger e join public.profiles p on p.id = e.user_id;
@@ -714,6 +801,7 @@ begin
   select * into e from public.ledger where id = p_id;
   if e.id is null then raise exception 'That entry was not found.'; end if;
   if e.user_id = m.id then raise exception 'Another Kitty manager has to mark your own entry.'; end if;
+  if e.status = 'waived' then raise exception 'That entry was waived after a dispute.'; end if;
   if p_paid then
     update public.ledger set status = 'paid', paid_at = public.app_now(), paid_marked_by = m.id where id = p_id;
   else
@@ -845,6 +933,406 @@ begin
   return public.get_leave();
 end $$;
 
+-- ----------------------------------------------------------- leaderboard ---
+
+-- Most hours of physical activity: this week, this calendar month, or all time.
+create or replace function public.get_leaderboard(p_period text default 'week') returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  v_period text := coalesce(p_period, 'week');
+  v_week date := public.week_of(m.timezone);
+  v_month date := date_trunc('month', public.app_now() at time zone m.timezone)::date;
+  v_from timestamptz;
+  v jsonb;
+begin
+  if v_period not in ('week', 'month', 'all') then raise exception 'Unknown period.'; end if;
+  v_from := v_month::timestamp at time zone m.timezone;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', x.id, 'nickname', x.nickname, 'title', x.title, 'is_me', x.id = m.id,
+           'minutes', x.minutes, 'sessions', x.sessions, 'rank', x.rk)
+           order by x.rk, x.nickname), '[]'::jsonb)
+    into v
+  from (
+    select p.id, p.nickname, p.title, t.minutes, t.sessions, rank() over (order by t.minutes desc) as rk
+    from public.profiles p
+    cross join lateral (
+      select coalesce(sum(l.duration_min), 0)::int as minutes, count(l.id)::int as sessions
+      from public.logs l join public.goals g on g.id = l.goal_id
+      where l.user_id = p.id and g.category = 'physical'
+        and (v_period = 'all'
+          or (v_period = 'week' and l.week_start = v_week)
+          or (v_period = 'month' and l.logged_at >= v_from))) t
+    where p.active
+  ) x;
+  return jsonb_build_object('period', v_period, 'week_start', v_week, 'month_start', v_month, 'members', v);
+end $$;
+
+-- -------------------------------------------------------------- disputes ---
+
+create or replace function public.money_text(p numeric) returns text
+language sql immutable as $$
+  select '$' || case when p = trunc(p) then to_char(p, 'FM999990') else to_char(p, 'FM999990.00') end
+$$;
+
+-- One dispute as the app shows it, with what the viewer is allowed to do.
+create or replace function public.dispute_json(p_id uuid, p_viewer uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  d public.disputes; v public.profiles; s public.settings;
+  v_party boolean; v_deadline timestamptz; v_seconders jsonb := '[]'::jsonb;
+begin
+  select * into d from public.disputes where id = p_id;
+  if d.id is null then return null; end if;
+  select * into v from public.profiles where id = p_viewer;
+  select * into s from public.settings where id = 1;
+  v_party := coalesce(v.id = d.lodger, false) or coalesce(v.id = d.subject_user, false) or coalesce(v.id = d.seconder, false);
+  v_deadline := case when d.ref_at is null then null else d.ref_at + make_interval(days => s.dispute_days) end;
+  if d.lodger = v.id and d.status in ('draft', 'advice') then
+    select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'nickname', p.nickname) order by p.nickname), '[]'::jsonb)
+      into v_seconders from public.profiles p
+      where p.active and p.eligible and p.id <> d.lodger and p.id is distinct from d.subject_user;
+  end if;
+  return jsonb_build_object(
+    'id', d.id, 'kind', d.kind, 'status', d.status,
+    'lodger', d.lodger, 'lodger_name', (select nickname from public.profiles where id = d.lodger),
+    'subject_user', d.subject_user, 'subject_name', (select nickname from public.profiles where id = d.subject_user),
+    'subject_label', d.subject_label, 'ledger_id', d.ledger_id, 'log_id', d.log_id, 'goals_week', d.goals_week,
+    'log_photo', (select photo_path from public.logs where id = d.log_id),
+    'standing', d.standing, 'grounds', d.grounds, 'evidence', d.evidence, 'evidence_paths', to_jsonb(d.evidence_paths),
+    'seconder', d.seconder, 'seconder_name', (select nickname from public.profiles where id = d.seconder),
+    'seconded_at', d.seconded_at, 'seconder_declined', d.seconder_declined,
+    'advice', case when d.lodger = v.id or v.is_ombudsman then d.advice else '' end,
+    'advice_name', case when d.lodger = v.id or v.is_ombudsman then (select nickname from public.profiles where id = d.advice_by) end,
+    'advice_at', case when d.lodger = v.id or v.is_ombudsman then d.advice_at end,
+    'findings', d.findings, 'findings_name', (select nickname from public.profiles where id = d.findings_by), 'findings_at', d.findings_at,
+    'decision', d.decision, 'decided_name', (select nickname from public.profiles where id = d.decided_by), 'decided_at', d.decided_at,
+    'fee', s.dispute_fee, 'fee_status', (select status from public.ledger where id = d.fee_entry),
+    'lodged_at', d.lodged_at, 'created_at', d.created_at, 'ref_at', d.ref_at,
+    'deadline', v_deadline, 'past_deadline', v_deadline is not null and public.app_now() > v_deadline,
+    'is_mine', d.lodger = v.id,
+    'can_edit', d.lodger = v.id and d.status = 'draft',
+    'can_ask', d.lodger = v.id and d.status = 'draft'
+               and exists (select 1 from public.profiles o where o.is_ombudsman and o.active and o.id <> d.lodger),
+    'can_lodge', d.lodger = v.id and d.status = 'draft',
+    'can_delete', d.lodger = v.id and d.status in ('draft', 'advice'),
+    'can_withdraw', d.lodger = v.id and d.status in ('seconding', 'open'),
+    'can_advise', v.is_ombudsman and d.status = 'advice' and d.lodger <> v.id,
+    'can_second', d.status = 'seconding' and d.seconder = v.id,
+    'can_find', v.is_ombudsman and d.status = 'open' and not v_party,
+    'can_decide', v.is_admin and d.status = 'open' and not v_party,
+    'seconders', v_seconders);
+end $$;
+
+create or replace function public.list_disputes() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  v jsonb;
+begin
+  select coalesce(jsonb_agg(x.j order by x.needs desc, x.closed, x.at desc), '[]'::jsonb) into v
+  from (
+    select
+      (d.status in ('upheld', 'dismissed', 'withdrawn')) as closed,
+      coalesce(d.decided_at, d.lodged_at, d.updated_at) as at,
+      n.what is not null as needs,
+      jsonb_build_object(
+        'id', d.id, 'kind', d.kind, 'status', d.status,
+        'lodger_name', (select nickname from public.profiles where id = d.lodger),
+        'subject_name', (select nickname from public.profiles where id = d.subject_user),
+        'subject_label', d.subject_label, 'grounds', left(d.grounds, 140),
+        'is_mine', d.lodger = m.id, 'lodged_at', d.lodged_at, 'created_at', d.created_at, 'decided_at', d.decided_at,
+        'needs_me', n.what) as j
+    from public.disputes d
+    cross join lateral (
+      select case
+        when d.status = 'seconding' and d.seconder = m.id then 'Second or decline'
+        when d.status = 'advice' and m.is_ombudsman and d.lodger <> m.id then 'Give advice'
+        when d.status = 'open' and m.is_admin and m.id not in (d.lodger, coalesce(d.subject_user, d.lodger), coalesce(d.seconder, d.lodger)) then 'Decide'
+        when d.status = 'open' and m.is_ombudsman and d.findings = ''
+             and m.id not in (d.lodger, coalesce(d.subject_user, d.lodger), coalesce(d.seconder, d.lodger)) then 'Inquire'
+      end as what) n
+    where d.lodger = m.id
+       or d.status not in ('draft', 'advice')
+       or (d.status = 'advice' and m.is_ombudsman)
+    order by d.created_at desc
+    limit 200
+  ) x;
+  return jsonb_build_object('disputes', v, 'fee', (select dispute_fee from public.settings where id = 1),
+    'days', (select dispute_days from public.settings where id = 1),
+    'has_ombudsman', exists (select 1 from public.profiles where is_ombudsman and active));
+end $$;
+
+create or replace function public.get_dispute(p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes;
+begin
+  select * into d from public.disputes where id = p_id;
+  if d.id is null
+     or (d.status = 'draft' and d.lodger <> m.id)
+     or (d.status = 'advice' and d.lodger <> m.id and not m.is_ombudsman) then
+    raise exception 'That dispute was not found.';
+  end if;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+-- Start or update a draft. What is being disputed is fixed when the draft is
+-- started: a Kitty entry (p_ref = its id), a session (a log id), someone's goals
+-- for a week ("<member id>:<monday>"), or anything else (no p_ref).
+create or replace function public.save_dispute(p_id uuid default null, p_kind text default null, p_ref text default null,
+  p_standing text default null, p_seconder uuid default null, p_grounds text default '', p_evidence text default '',
+  p_evidence_paths jsonb default '[]'::jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes; e public.ledger; l public.logs; g public.goals; t public.profiles;
+  v_paths text[]; v_week date; v_total int; v_existing uuid; v_standing text := coalesce(p_standing, 'affected');
+begin
+  if v_standing not in ('affected', 'seconded', 'attorney') then raise exception 'Choose your standing.'; end if;
+  if v_standing = 'attorney' and not m.is_attorney then raise exception 'Only the Attorney-General can lodge without a seconder.'; end if;
+  select coalesce(array_agg(x), '{}') into v_paths from jsonb_array_elements_text(coalesce(p_evidence_paths, '[]'::jsonb)) x;
+  if array_length(v_paths, 1) > 3 then raise exception 'Add up to 3 photos of evidence.'; end if;
+  if exists (select 1 from unnest(v_paths) x where x not like (m.id::text || '/%')) then
+    raise exception 'Evidence photos must be your own uploads.';
+  end if;
+
+  if p_id is null then
+    d.id := gen_random_uuid();
+    d.lodger := m.id;
+    d.kind := p_kind;
+    if p_kind = 'forfeit' then
+      select * into e from public.ledger where id = nullif(p_ref, '')::uuid;
+      if e.id is null then raise exception 'That Kitty entry was not found.'; end if;
+      select * into t from public.profiles where id = e.user_id;
+      d.ledger_id := e.id; d.subject_user := e.user_id; d.ref_at := e.created_at;
+      d.subject_label := case when e.kind = 'forfeit' then 'Forfeit, week of ' || to_char(e.week_start, 'FMDD Mon')
+                              else coalesce(nullif(e.note, ''), 'Fee') end
+                         || ' · ' || t.nickname || ' · ' || public.money_text(e.amount);
+    elsif p_kind = 'log' then
+      select * into l from public.logs where id = nullif(p_ref, '')::uuid;
+      if l.id is null then raise exception 'That session was not found.'; end if;
+      if l.user_id = m.id then raise exception 'You cannot dispute your own session.'; end if;
+      select * into g from public.goals where id = l.goal_id;
+      select * into t from public.profiles where id = l.user_id;
+      d.log_id := l.id; d.subject_user := l.user_id; d.ref_at := l.logged_at;
+      d.subject_label := t.nickname || ': ' || g.activity || ', ' || l.duration_min || ' min, '
+                         || to_char(l.logged_at at time zone t.timezone, 'Dy FMDD Mon FMHH12:MI am');
+    elsif p_kind = 'goals' then
+      select * into t from public.profiles where id = nullif(split_part(coalesce(p_ref, ''), ':', 1), '')::uuid;
+      v_week := nullif(split_part(coalesce(p_ref, ''), ':', 2), '')::date;
+      if t.id is null or v_week is null then raise exception 'Those goals were not found.'; end if;
+      if t.id = m.id then raise exception 'You cannot dispute your own goals.'; end if;
+      select coalesce(sum(target), 0) into v_total from public.goals where user_id = t.id and week_start = v_week;
+      if v_total = 0 then raise exception '% declared no goals that week.', t.nickname; end if;
+      d.goals_week := v_week; d.subject_user := t.id; d.ref_at := public.lock_at(v_week, t.timezone);
+      d.subject_label := t.nickname || '''s goals, week of ' || to_char(v_week, 'FMDD Mon') || ' (' || v_total || ' declared)';
+    elsif p_kind = 'other' then
+      d.subject_label := '';
+    else
+      raise exception 'Choose what you are disputing.';
+    end if;
+    -- Opening the same thing again picks up the draft already started.
+    if d.kind <> 'other' then
+      select x.id into v_existing from public.disputes x
+        where x.lodger = m.id and x.status in ('draft', 'advice') and x.kind = d.kind
+          and x.ledger_id is not distinct from d.ledger_id and x.log_id is not distinct from d.log_id
+          and x.goals_week is not distinct from d.goals_week and x.subject_user is not distinct from d.subject_user
+        limit 1;
+      if v_existing is not null then return public.dispute_json(v_existing, m.id); end if;
+    end if;
+    insert into public.disputes (id, lodger, kind, ledger_id, log_id, goals_week, subject_user, subject_label, ref_at, created_at, updated_at)
+      values (d.id, d.lodger, d.kind, d.ledger_id, d.log_id, d.goals_week, d.subject_user, d.subject_label, d.ref_at, public.app_now(), public.app_now());
+  else
+    select * into d from public.disputes where id = p_id;
+    if d.id is null or d.lodger <> m.id then raise exception 'That dispute was not found.'; end if;
+    if d.status <> 'draft' then raise exception 'This dispute can no longer be changed.'; end if;
+  end if;
+
+  if p_seconder is not null and not exists (
+       select 1 from public.profiles p where p.id = p_seconder and p.active and p.eligible
+         and p.id <> m.id and p.id is distinct from d.subject_user) then
+    raise exception 'That member cannot second this dispute.';
+  end if;
+  update public.disputes set
+    standing = v_standing,
+    seconder = case when v_standing = 'seconded' then p_seconder else null end,
+    grounds = left(btrim(coalesce(p_grounds, '')), 2000),
+    evidence = left(btrim(coalesce(p_evidence, '')), 2000),
+    evidence_paths = v_paths,
+    updated_at = public.app_now()
+  where id = d.id;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+create or replace function public.delete_dispute(p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+begin
+  delete from public.disputes where id = p_id and lodger = m.id and status in ('draft', 'advice');
+  if not found then raise exception 'Only a draft you have not lodged can be deleted.'; end if;
+  return public.list_disputes();
+end $$;
+
+-- Before lodging, a member can send the draft to the Ombudsman for advice. No fee.
+create or replace function public.ask_ombudsman(p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes;
+begin
+  select * into d from public.disputes where id = p_id and lodger = m.id;
+  if d.id is null then raise exception 'That dispute was not found.'; end if;
+  if d.status <> 'draft' then raise exception 'This dispute is not a draft.'; end if;
+  if length(d.grounds) < 10 then raise exception 'Write the grounds first, so the Ombudsman knows what it is about.'; end if;
+  if not exists (select 1 from public.profiles where is_ombudsman and active and id <> m.id) then
+    raise exception 'No Ombudsman has been set yet. The Executive sets one under More, Members.';
+  end if;
+  update public.disputes set status = 'advice', updated_at = public.app_now() where id = d.id;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+create or replace function public.give_advice(p_id uuid, p_note text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes; v_note text := btrim(coalesce(p_note, ''));
+begin
+  if not m.is_ombudsman then raise exception 'Only the Ombudsman can do that.'; end if;
+  select * into d from public.disputes where id = p_id;
+  if d.id is null or d.status <> 'advice' then raise exception 'That dispute is not waiting for advice.'; end if;
+  if d.lodger = m.id then raise exception 'Another Ombudsman has to advise on your own dispute.'; end if;
+  if length(v_note) < 2 then raise exception 'Write your advice.'; end if;
+  update public.disputes set status = 'draft', advice = left(v_note, 2000), advice_by = m.id, advice_at = public.app_now(),
+    updated_at = public.app_now() where id = d.id;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+-- Lodging opens the dispute and adds the handling fee to the Kitty. If the member
+-- is not directly affected, it waits for the chosen member to second it first.
+create or replace function public.lodge_dispute(p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes; s public.settings; v_fee uuid;
+begin
+  select * into d from public.disputes where id = p_id and lodger = m.id for update;
+  if d.id is null then raise exception 'That dispute was not found.'; end if;
+  if d.status <> 'draft' then raise exception 'This dispute has already been lodged.'; end if;
+  select * into s from public.settings where id = 1;
+  if length(d.grounds) < 10 then raise exception 'Explain the grounds of the dispute.'; end if;
+  if d.ref_at is not null and public.app_now() > d.ref_at + make_interval(days => s.dispute_days) then
+    raise exception 'Disputes have to be lodged within % days, and this one closed on %.', s.dispute_days,
+      to_char((d.ref_at + make_interval(days => s.dispute_days)) at time zone m.timezone, 'Dy FMDD Mon');
+  end if;
+  if d.standing = 'affected' and d.kind <> 'other' and d.subject_user is distinct from m.id then
+    raise exception 'You are not directly affected by this, so another member has to second it.';
+  end if;
+  if d.standing = 'attorney' and not m.is_attorney then
+    raise exception 'Only the Attorney-General can lodge without a seconder.';
+  end if;
+  if d.standing = 'seconded' then
+    if d.seconder is null then raise exception 'Choose a member to second this dispute.'; end if;
+    update public.disputes set status = 'seconding', lodged_at = public.app_now(), updated_at = public.app_now() where id = d.id;
+    return public.dispute_json(d.id, m.id);
+  end if;
+  if s.dispute_fee > 0 then
+    insert into public.ledger (user_id, kind, amount, note, status, due_date, created_at)
+      values (m.id, 'fee', s.dispute_fee, left('Dispute fee: ' || coalesce(nullif(d.subject_label, ''), 'dispute'), 140), 'owed',
+              (public.app_now() at time zone m.timezone)::date + s.forfeit_due_days, public.app_now())
+      returning id into v_fee;
+  end if;
+  update public.disputes set status = 'open', lodged_at = public.app_now(), fee_entry = v_fee, updated_at = public.app_now() where id = d.id;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+create or replace function public.second_dispute(p_id uuid, p_accept boolean) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes; s public.settings; l public.profiles; v_fee uuid;
+begin
+  select * into d from public.disputes where id = p_id for update;
+  if d.id is null or d.status <> 'seconding' or d.seconder is distinct from m.id then
+    raise exception 'That dispute is not waiting for you to second it.';
+  end if;
+  if not p_accept then
+    update public.disputes set status = 'draft', seconder = null, lodged_at = null, seconder_declined = m.nickname,
+      updated_at = public.app_now() where id = d.id;
+    return public.dispute_json(d.id, m.id);
+  end if;
+  select * into s from public.settings where id = 1;
+  select * into l from public.profiles where id = d.lodger;
+  if s.dispute_fee > 0 then
+    insert into public.ledger (user_id, kind, amount, note, status, due_date, created_at)
+      values (d.lodger, 'fee', s.dispute_fee, left('Dispute fee: ' || coalesce(nullif(d.subject_label, ''), 'dispute'), 140), 'owed',
+              (public.app_now() at time zone l.timezone)::date + s.forfeit_due_days, public.app_now())
+      returning id into v_fee;
+  end if;
+  update public.disputes set status = 'open', seconded_at = public.app_now(), fee_entry = v_fee, updated_at = public.app_now()
+    where id = d.id;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+-- The Ombudsman's inquiry: findings and a recommendation for the Executive.
+create or replace function public.add_findings(p_id uuid, p_note text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes; v_note text := btrim(coalesce(p_note, ''));
+begin
+  if not m.is_ombudsman then raise exception 'Only the Ombudsman can do that.'; end if;
+  select * into d from public.disputes where id = p_id;
+  if d.id is null or d.status <> 'open' then raise exception 'That dispute is not open.'; end if;
+  if m.id in (d.lodger, coalesce(d.subject_user, d.lodger), coalesce(d.seconder, d.lodger)) then
+    raise exception 'You are part of this dispute, so you cannot inquire into it.';
+  end if;
+  if length(v_note) < 2 then raise exception 'Write your findings.'; end if;
+  update public.disputes set findings = left(v_note, 2000), findings_by = m.id, findings_at = public.app_now(),
+    updated_at = public.app_now() where id = d.id;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+-- The Executive decides. Upheld: the fee is waived, a disputed forfeit or fee is
+-- waived, and a disputed session is removed from the record.
+create or replace function public.decide_dispute(p_id uuid, p_uphold boolean, p_note text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  d public.disputes; v_note text := btrim(coalesce(p_note, ''));
+begin
+  if not m.is_admin then raise exception 'Only the Executive can decide a dispute.'; end if;
+  select * into d from public.disputes where id = p_id for update;
+  if d.id is null or d.status <> 'open' then raise exception 'That dispute is not open.'; end if;
+  if m.id in (d.lodger, coalesce(d.subject_user, d.lodger), coalesce(d.seconder, d.lodger)) then
+    raise exception 'You are part of this dispute, so someone else has to decide it.';
+  end if;
+  if length(v_note) < 2 then raise exception 'Give a short reason for the decision.'; end if;
+  if p_uphold then
+    update public.ledger set status = 'waived' where id = d.fee_entry;
+    if d.kind = 'forfeit' then update public.ledger set status = 'waived' where id = d.ledger_id; end if;
+    if d.kind = 'log' then delete from public.logs where id = d.log_id; end if;
+  end if;
+  update public.disputes set status = case when p_uphold then 'upheld' else 'dismissed' end,
+    decision = left(v_note, 2000), decided_by = m.id, decided_at = public.app_now(), updated_at = public.app_now()
+    where id = d.id;
+  return public.dispute_json(d.id, m.id);
+end $$;
+
+-- Withdrawing does not refund the fee once a dispute is open.
+create or replace function public.withdraw_dispute(p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+begin
+  update public.disputes set status = 'withdrawn', updated_at = public.app_now()
+    where id = p_id and lodger = m.id and status in ('seconding', 'open');
+  if not found then raise exception 'Only a lodged dispute that is still open can be withdrawn.'; end if;
+  return public.dispute_json(p_id, m.id);
+end $$;
+
 -- ----------------------------------------------------------------- admin ---
 
 create or replace function public.list_members() returns jsonb
@@ -857,6 +1345,7 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', p.id, 'nickname', p.nickname, 'title', p.title, 'timezone', p.timezone, 'eligible', p.eligible,
            'is_admin', p.is_admin, 'can_manage_kitty', p.can_manage_kitty, 'active', p.active,
+           'is_ombudsman', p.is_ombudsman, 'is_attorney', p.is_attorney,
            'sort_order', p.sort_order, 'joined_at', p.joined_at, 'email', u.email, 'is_me', p.id = m.id)
            order by p.sort_order nulls last, p.joined_at), '[]'::jsonb)
     into v
@@ -893,6 +1382,8 @@ begin
     eligible = coalesce((p_patch->>'eligible')::boolean, eligible),
     is_admin = v_admin,
     can_manage_kitty = coalesce((p_patch->>'can_manage_kitty')::boolean, can_manage_kitty),
+    is_ombudsman = coalesce((p_patch->>'is_ombudsman')::boolean, is_ombudsman),
+    is_attorney = coalesce((p_patch->>'is_attorney')::boolean, is_attorney),
     active = v_active,
     sort_order = case when p_patch ? 'sort_order' then nullif(p_patch->>'sort_order', '')::int else sort_order end
   where id = t.id;
@@ -928,6 +1419,8 @@ begin
   if p_patch ? 'forfeit_per_member' then s.forfeit_per_member := (p_patch->>'forfeit_per_member')::numeric; end if;
   if p_patch ? 'forfeit_due_days' then s.forfeit_due_days := (p_patch->>'forfeit_due_days')::int; end if;
   if p_patch ? 'leave_min_days' then s.leave_min_days := (p_patch->>'leave_min_days')::int; end if;
+  if p_patch ? 'dispute_fee' then s.dispute_fee := (p_patch->>'dispute_fee')::numeric; end if;
+  if p_patch ? 'dispute_days' then s.dispute_days := (p_patch->>'dispute_days')::int; end if;
   if p_patch ? 'first_week_grace' then s.first_week_grace := coalesce((p_patch->>'first_week_grace')::boolean, s.first_week_grace); end if;
   if p_patch ? 'join_code' then
     v_code := upper(btrim(coalesce(p_patch->>'join_code', '')));
@@ -939,10 +1432,12 @@ begin
   if s.forfeit_per_member < 0 or s.forfeit_per_member > 1000 then raise exception 'The forfeit per member must be between 0 and 1000.'; end if;
   if s.forfeit_due_days < 0 or s.forfeit_due_days > 90 then raise exception 'Days to pay must be between 0 and 90.'; end if;
   if s.leave_min_days < 1 or s.leave_min_days > 7 then raise exception 'Leave days needed must be between 1 and 7.'; end if;
+  if s.dispute_fee < 0 or s.dispute_fee > 1000 then raise exception 'The dispute fee must be between 0 and 1000.'; end if;
+  if s.dispute_days < 1 or s.dispute_days > 90 then raise exception 'Days to lodge a dispute must be between 1 and 90.'; end if;
   update public.settings set group_name = s.group_name, min_goals = s.min_goals,
     min_physical_minutes = s.min_physical_minutes, forfeit_per_member = s.forfeit_per_member,
     forfeit_due_days = s.forfeit_due_days, join_code = s.join_code, first_week_grace = s.first_week_grace,
-    leave_min_days = s.leave_min_days
+    leave_min_days = s.leave_min_days, dispute_fee = s.dispute_fee, dispute_days = s.dispute_days
   where id = 1;
   return to_jsonb(s);
 end $$;
@@ -958,9 +1453,11 @@ declare
   api text[] := array['get_state', 'join_group', 'update_my_profile', 'get_week', 'save_goals', 'log_activity',
     'undo_log', 'get_group', 'get_member', 'get_kitty', 'issue_forfeit', 'excuse_week', 'add_entry', 'set_paid',
     'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member',
-    'get_leave', 'request_leave', 'cancel_leave', 'decide_leave'];
+    'get_leave', 'request_leave', 'cancel_leave', 'decide_leave', 'get_leaderboard',
+    'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
+    'second_dispute', 'add_findings', 'decide_dispute', 'withdraw_dispute'];
   internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until',
-    'leave_days', 'on_leave', 'eligible_count'];
+    'leave_days', 'on_leave', 'eligible_count', 'roll_goals', 'dispute_json', 'money_text'];
 begin
   for r in
     select p.oid::regprocedure as sig, p.proname

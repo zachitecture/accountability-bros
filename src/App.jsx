@@ -9,6 +9,7 @@ import Member from './screens/Member.jsx';
 import Kitty from './screens/Kitty.jsx';
 import More from './screens/More.jsx';
 import Leave from './screens/Leave.jsx';
+import { Dispute, DisputeNew, Disputes } from './screens/Disputes.jsx';
 
 const TABS = [
   ['log', 'Log', 'log'],
@@ -101,6 +102,9 @@ export default function App() {
   const [page, a, b] = route;
   let screen;
   if (page === 'leave') screen = <Leave />;
+  else if (page === 'disputes') screen = <Disputes state={state} />;
+  else if (page === 'dispute' && a === 'new' && b) screen = <DisputeNew key={`${b}-${route[3] || ''}`} kind={b} ref={route[3] || null} />;
+  else if (page === 'dispute' && a) screen = <Dispute key={a} state={state} id={a} />;
   else if (page === 'goals') screen = <Goals key={`${a || 'me'}-${b || ''}`} state={state} userId={a} week={b} />;
   else if (page === 'group') screen = <Group state={state} />;
   else if (page === 'member' && a) screen = <Member key={a} state={state} userId={a} />;
@@ -108,6 +112,6 @@ export default function App() {
   else if (page === 'more') screen = <More state={state} email={session.user.email} onState={setState} refresh={refresh} />;
   else screen = <Log state={state} refresh={refresh} />;
 
-  const active = page === 'member' ? 'group' : page === 'leave' ? 'goals' : page;
+  const active = page === 'member' ? 'group' : page === 'leave' ? 'goals' : page === 'disputes' || page === 'dispute' ? 'kitty' : page;
   return <Shell tabs active={active}>{screen}</Shell>;
 }

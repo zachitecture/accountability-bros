@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { proofUrl } from './api.js';
 
 // ---- tiny hash router: #/log, #/goals, #/group, #/member/<id>, #/kitty, #/more
-const KNOWN = ['log', 'goals', 'leave', 'group', 'member', 'kitty', 'more'];
+const KNOWN = ['log', 'goals', 'leave', 'group', 'member', 'kitty', 'disputes', 'dispute', 'more'];
 function parseHash() {
   const parts = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   return KNOWN.includes(parts[0]) ? parts : ['log'];

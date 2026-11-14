@@ -241,7 +241,8 @@ await test('the Kitty: misses, forfeits and who may mark them paid', async () =>
   assert.equal(k.forfeit_amount, 20);
   const missed = k.misses.map((m) => `${m.nickname} ${m.week_start} ${m.done}/${m.total}`);
   // Dija is in London, where it is still Sunday: her week of 9 Nov has not finished, so only 2 Nov shows.
-  assert.deepEqual(missed.sort(), ['Dija 2026-11-02 0/0', 'Gilly 2026-11-02 0/3', 'Gilly 2026-11-09 0/0', 'Rad 2026-11-02 1/2', 'Rad 2026-11-09 0/3']);
+  // Gilly declared nothing for 9 Nov, so her 3 goals from 2 Nov carried over.
+  assert.deepEqual(missed.sort(), ['Dija 2026-11-02 0/0', 'Gilly 2026-11-02 0/3', 'Gilly 2026-11-09 0/3', 'Rad 2026-11-02 1/2', 'Rad 2026-11-09 0/3']);
   assert.equal((await call(rad, 'get_kitty')).misses.length, 0);
   await fails(call(gilly, 'issue_forfeit', { p_user: rad, p_week: '2026-11-16' }), /not finished/);
   const k2 = await call(gilly, 'issue_forfeit', { p_user: rad, p_week: '2026-11-09' });
@@ -381,6 +382,152 @@ await test('leave weeks: no forfeit, streak kept, and fewer Eligible Members', a
   await call(khov, 'update_settings', { p_patch: { leave_min_days: 7 } });
   assert.equal((await call(dija, 'get_week', { p_week: '2026-11-23' })).on_leave, true);
   await call(khov, 'update_settings', { p_patch: { leave_min_days: 4 } });
+});
+
+const forfeitOf = async (uid, week) => (await call(khov, 'get_kitty')).entries.find((e) => e.kind === 'forfeit' && e.week_start === week && e.user_id === uid);
+const late = (await call(khov, 'list_members')).find((m) => m.nickname === 'Late').id;
+const later = (await call(khov, 'list_members')).find((m) => m.nickname === 'Later').id;
+let khovLog;
+
+await test('private notes: only the member who logged the session sees them', async () => {
+  // Now Mon 30 Nov. Khov's goals carried over from the week before.
+  const w = await call(khov, 'get_week');
+  assert.equal(w.carried, true);
+  const gym = w.goals.find((g) => g.category === 'physical');
+  const l = await call(khov, 'log_activity', { p_goal_id: gym.id, p_duration: 50, p_photo_path: `${khov}/n.jpg`, p_note: 'Felt strong, new PB on squat' });
+  khovLog = l.id;
+  assert.equal((await call(khov, 'get_member', { p_user: khov })).logs[0].note, 'Felt strong, new PB on squat');
+  assert.equal((await call(gilly, 'get_member', { p_user: khov })).logs[0].note, '');
+  assert.equal('note' in l, false); // not sent back for the stamp
+});
+
+await test('leaderboard: most hours of physical activity', async () => {
+  const week = await call(rad, 'get_leaderboard', { p_period: 'week' });
+  assert.equal(week.members[0].nickname, 'Khov');
+  assert.equal(week.members[0].minutes, 50);
+  assert.equal(week.members[0].rank, 1);
+  assert.equal(week.members.length, 6);
+  const all = await call(rad, 'get_leaderboard', { p_period: 'all' });
+  const k = all.members.find((m) => m.nickname === 'Khov');
+  assert.ok(k.minutes > 50 && k.sessions > 1);
+  await fails(call(rad, 'get_leaderboard', { p_period: 'year' }), /Unknown period/);
+});
+
+await test('disputes: own forfeit, Ombudsman advice first, upheld so fee and forfeit are waived', async () => {
+  await call(khov, 'update_member', { p_user: dija, p_patch: { is_ombudsman: true, title: 'Ombudsman' } });
+  await call(khov, 'update_member', { p_user: rad, p_patch: { is_attorney: true, title: 'Attorney-General' } });
+  const f = await forfeitOf(khov, '2026-11-23');
+  let d = await call(khov, 'save_dispute', { p_id: null, p_kind: 'forfeit', p_ref: f.id, p_standing: 'affected', p_seconder: null,
+    p_grounds: 'I was on annual leave but forgot to log it before it started.', p_evidence: 'Flight booking', p_evidence_paths: [`${khov}/ev.jpg`] });
+  assert.equal(d.status, 'draft');
+  assert.equal(d.subject_label, 'Forfeit, week of 23 Nov · Khov · $10');
+  await fails(call(khov, 'save_dispute', { p_id: d.id, p_standing: 'affected', p_grounds: 'x', p_evidence: '', p_evidence_paths: [`${rad}/x.jpg`] }), /your own uploads/);
+  await fails(call(gilly, 'get_dispute', { p_id: d.id }), /not found/); // drafts are private
+  d = await call(khov, 'ask_ombudsman', { p_id: d.id });
+  assert.equal(d.status, 'advice');
+  await fails(call(gilly, 'get_dispute', { p_id: d.id }), /not found/);
+  assert.equal((await call(dija, 'list_disputes')).disputes[0].needs_me, 'Give advice');
+  await fails(call(gilly, 'give_advice', { p_id: d.id, p_note: 'Go for it' }), /Only the Ombudsman/);
+  d = await call(dija, 'give_advice', { p_id: d.id, p_note: 'Worth lodging. Attach the booking.' });
+  assert.equal(d.status, 'draft');
+  assert.equal((await call(khov, 'get_dispute', { p_id: d.id })).advice, 'Worth lodging. Attach the booking.');
+  const before = (await call(khov, 'get_kitty')).owed;
+  d = await call(khov, 'lodge_dispute', { p_id: d.id });
+  assert.equal(d.status, 'open');
+  assert.equal(d.fee_status, 'owed');
+  assert.equal((await call(khov, 'get_kitty')).owed, before + 15);
+  // Everyone can see a lodged dispute, but not the private advice.
+  const seen = await call(rad, 'get_dispute', { p_id: d.id });
+  assert.equal(seen.advice, '');
+  await fails(call(khov, 'decide_dispute', { p_id: d.id, p_uphold: true, p_note: 'Mine' }), /part of this dispute/);
+  await fails(call(dija, 'decide_dispute', { p_id: d.id, p_uphold: true, p_note: 'Yes' }), /Only the Executive/);
+  await call(dija, 'add_findings', { p_id: d.id, p_note: 'Booking checks out. Recommend upholding.' });
+  d = await call(gilly, 'decide_dispute', { p_id: d.id, p_uphold: true, p_note: 'Upheld on the Ombudsman\'s findings.' });
+  assert.equal(d.status, 'upheld');
+  assert.equal(d.fee_status, 'waived');
+  assert.equal((await forfeitOf(khov, '2026-11-23')).status, 'waived');
+  assert.equal((await call(khov, 'get_kitty')).owed, before - 10);
+  await fails(call(dija, 'set_paid', { p_id: f.id, p_paid: true }), /waived/);
+});
+
+await test('disputes: someone else\'s session needs a seconder; dismissed means the fee stands', async () => {
+  await fails(call(khov, 'save_dispute', { p_id: null, p_kind: 'log', p_ref: khovLog, p_standing: 'affected', p_seconder: null, p_grounds: '', p_evidence: '' }), /your own session/);
+  let d = await call(gilly, 'save_dispute', { p_id: null, p_kind: 'log', p_ref: khovLog, p_standing: 'affected', p_seconder: null,
+    p_grounds: 'That photo is from last week, the same shirt and the same rack.', p_evidence: '' });
+  assert.match(d.subject_label, /^Khov: Gym, 50 min, Mon 30 Nov/);
+  await fails(call(gilly, 'lodge_dispute', { p_id: d.id }), /another member has to second it/);
+  await fails(call(gilly, 'save_dispute', { p_id: d.id, p_standing: 'seconded', p_seconder: khov, p_grounds: d.grounds, p_evidence: '' }), /cannot second/);
+  d = await call(gilly, 'save_dispute', { p_id: d.id, p_standing: 'seconded', p_seconder: late, p_grounds: d.grounds, p_evidence: '' });
+  d = await call(gilly, 'lodge_dispute', { p_id: d.id });
+  assert.equal(d.status, 'seconding');
+  assert.equal(d.fee_status, null); // no fee until it is seconded
+  await fails(call(later, 'second_dispute', { p_id: d.id, p_accept: true }), /not waiting for you/);
+  d = await call(late, 'second_dispute', { p_id: d.id, p_accept: false });
+  assert.equal(d.status, 'draft');
+  assert.equal(d.seconder_declined, 'Late');
+  await call(gilly, 'save_dispute', { p_id: d.id, p_standing: 'seconded', p_seconder: later, p_grounds: d.grounds, p_evidence: '' });
+  await call(gilly, 'lodge_dispute', { p_id: d.id });
+  d = await call(later, 'second_dispute', { p_id: d.id, p_accept: true });
+  assert.equal(d.status, 'open');
+  assert.equal(d.fee_status, 'owed');
+  // Khov is the subject and Gilly lodged it, so neither member of the Executive can decide it here.
+  await fails(call(khov, 'decide_dispute', { p_id: d.id, p_uphold: false, p_note: 'No' }), /part of this dispute/);
+  await fails(call(gilly, 'decide_dispute', { p_id: d.id, p_uphold: false, p_note: 'No' }), /part of this dispute/);
+  await call(khov, 'update_member', { p_user: late, p_patch: { is_admin: true } });
+  await fails(call(late, 'decide_dispute', { p_id: d.id, p_uphold: false, p_note: '' }), /short reason/);
+  d = await call(late, 'decide_dispute', { p_id: d.id, p_uphold: false, p_note: 'Photo metadata shows today.' });
+  assert.equal(d.status, 'dismissed');
+  assert.equal(d.fee_status, 'owed');
+  assert.equal((await call(khov, 'get_member', { p_user: khov })).logs.length, 1); // the session stands
+  await call(khov, 'update_member', { p_user: late, p_patch: { is_admin: false } });
+});
+
+await test('disputes: the Attorney-General needs no seconder; withdrawing keeps the fee', async () => {
+  let d = await call(rad, 'save_dispute', { p_id: null, p_kind: 'goals', p_ref: `${gilly}:2026-11-30`, p_standing: 'attorney', p_seconder: null,
+    p_grounds: 'Three goals is sandbagging for the President.', p_evidence: '' });
+  assert.equal(d.subject_label, 'Gilly\'s goals, week of 30 Nov (3 declared)');
+  await fails(call(khov, 'save_dispute', { p_id: null, p_kind: 'goals', p_ref: `${gilly}:2026-11-30`, p_standing: 'attorney', p_seconder: null, p_grounds: '', p_evidence: '' }), /Attorney-General/);
+  d = await call(rad, 'lodge_dispute', { p_id: d.id });
+  assert.equal(d.status, 'open');
+  d = await call(rad, 'withdraw_dispute', { p_id: d.id });
+  assert.equal(d.status, 'withdrawn');
+  assert.equal(d.fee_status, 'owed');
+  const list = (await call(late, 'list_disputes')).disputes;
+  assert.equal(list.length, 3); // lodged ones are public
+});
+
+await test('disputes: 7 days to lodge', async () => {
+  await setNow('2026-12-08T02:00:00Z'); // Tue 8 Dec
+  const old = (await call(khov, 'get_kitty')).entries.find((e) => e.kind === 'forfeit' && e.nickname === 'Rad');
+  let d = await call(rad, 'save_dispute', { p_id: null, p_kind: 'forfeit', p_ref: old.id, p_standing: 'affected', p_seconder: null,
+    p_grounds: 'I did all my sessions that week.', p_evidence: '' });
+  assert.equal(d.past_deadline, true);
+  await fails(call(rad, 'lodge_dispute', { p_id: d.id }), /within 7 days/);
+  await call(rad, 'delete_dispute', { p_id: d.id });
+  await fails(call(rad, 'get_dispute', { p_id: d.id }), /not found/);
+});
+
+await test('goals carry over to the next week until they are changed', async () => {
+  const lastWeek = (await call(khov, 'get_week', { p_week: '2026-11-30' })).goals.map((g) => `${g.activity} ${g.target}`);
+  const w = await call(khov, 'get_week');
+  assert.equal(w.week_start, '2026-12-07');
+  assert.equal(w.carried, true);
+  assert.deepEqual(w.goals.map((g) => `${g.activity} ${g.target}`), lastWeek);
+  // Changing next week's goals early means nothing is carried into it.
+  const n = await call(khov, 'save_goals', { p_week: '2026-12-14', p_goals: [{ activity: 'Run', category: 'physical', target: 4 }] });
+  assert.equal(n.carried, false);
+  await setNow('2026-12-14T23:00:00Z'); // Tue 15 Dec
+  assert.deepEqual((await call(khov, 'get_week')).goals.map((g) => `${g.activity} ${g.target}`), ['Run 4']);
+  await setNow('2026-12-21T23:00:00Z'); // Tue 22 Dec
+  const c = await call(khov, 'get_week');
+  assert.equal(c.carried, true);
+  assert.deepEqual(c.goals.map((g) => `${g.activity} ${g.target}`), ['Run 4']);
+  // A paused member gets nothing carried.
+  await call(khov, 'update_member', { p_user: later, p_patch: { active: false } });
+  await setNow('2026-12-28T23:00:00Z');
+  await call(khov, 'get_group');
+  await call(khov, 'update_member', { p_user: later, p_patch: { active: true } });
+  assert.equal((await call(later, 'get_week', { p_week: '2026-12-28' })).goals.length, 0);
 });
 
 await test('photo storage: own folder only, members only', async () => {

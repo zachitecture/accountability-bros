@@ -24,6 +24,7 @@ export default function Log({ state }) {
   const [minutes, setMinutes] = useState('');
   const [photo, setPhoto] = useState(null); // { blob, url }
   const [selfie, setSelfie] = useState(null); // { blob, url }, optional
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null); // { log, blob, url, fileName }
@@ -87,7 +88,7 @@ export default function Log({ state }) {
       setBusy('Uploading photo…');
       const path = await uploadProof(state.me.id, photo.blob);
       setBusy('Logging…');
-      const log = await rpc('log_activity', { p_goal_id: selected.id, p_duration: mins, p_photo_path: path });
+      const log = await rpc('log_activity', { p_goal_id: selected.id, p_duration: mins, p_photo_path: path, p_note: note });
       setBusy('Stamping…');
       const blob = await makeStamp(photo.blob, log, selfie ? selfie.blob : null);
       setResult({ log, blob, url: URL.createObjectURL(blob), fileName: `${slug(log.nickname)}-${slug(log.activity)}-${log.done}-of-${log.total}.jpg` });
@@ -123,6 +124,7 @@ export default function Log({ state }) {
     setResult(null);
     setPhoto(null);
     setSelfie(null);
+    setNote('');
     setHours('');
     setMinutes('');
     setGoalId(null);
@@ -307,6 +309,12 @@ export default function Log({ state }) {
             Add a selfie to the stamp
           </button>
         )}
+      </div>
+
+      <div className="field">
+        <label className="label" htmlFor="log-note">Note (optional, only you see it)</label>
+        <textarea id="log-note" className="textarea" style={{ minHeight: 64 }} maxLength={500} placeholder="e.g. Squat 100 kg x 5, felt strong" value={note} onChange={(e) => setNote(e.target.value)} />
+        <div className="tiny muted">Not on the stamp and not shown to the group.</div>
       </div>
 
       <ErrorNote>{error}</ErrorNote>
