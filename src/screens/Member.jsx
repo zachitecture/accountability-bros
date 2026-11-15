@@ -1,9 +1,24 @@
-import React, { useState } from 'react';
-import { rpc } from '../api.js';
+import React, { useMemo, useState } from 'react';
+import { proofUrl, rpc } from '../api.js';
+import { makeStamp } from '../image.js';
 import { addDays, fmtDate, fmtDayTime, fmtDuration, plural } from '../format.js';
 import { ErrorNote, Head, Icon, Loading, ProofThumb, useLoad } from '../ui.jsx';
 
+function canShareFiles() {
+  try {
+    const probe = new File([new Blob(['x'], { type: 'image/jpeg' })], 'x.jpg', { type: 'image/jpeg' });
+    return Boolean(navigator.canShare && navigator.canShare({ files: [probe] }));
+  } catch {
+    return false;
+  }
+}
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'activity';
+
 export default function Member({ state, userId }) {
+  const shareable = useMemo(canShareFiles, []);
+  const [stamp, setStamp] = useState(null); // { blob, url, fileName, alt } for a stamp made again from a past entry
+  const [stamping, setStamping] = useState('');
+
   const [week, setWeek] = useState(null); // null = that member's current week
   const load = useLoad(() => rpc('get_member', { p_user: userId, p_week: week }), [userId, week]);
   const [error, setError] = useState('');
@@ -19,6 +34,51 @@ export default function Member({ state, userId }) {
     } catch (e) {
       setError(e.message);
     }
+  }
+
+  // Make the stamp again from the stored proof photo, so a session that never got
+  // sent to the chat can still be shared. The tally is what it was at that session.
+  async function restamp(log, index) {
+    setError('');
+    setStamping(log.id);
+    try {
+      const photo = await (await fetch(await proofUrl(log.photo_path))).blob();
+      const info = {
+        ...log, nickname: d.nickname, timezone: d.timezone, done: index + 1,
+        total: d.goals.reduce((n, g) => n + g.target, 0),
+        group_name: state.settings.group_name, min_physical_minutes: state.settings.min_physical_minutes,
+      };
+      const blob = await makeStamp(photo, info);
+      setStamp({
+        blob, url: URL.createObjectURL(blob),
+        fileName: `${slug(d.nickname)}-${slug(log.activity)}-${info.done}-of-${info.total}.jpg`,
+        alt: `${d.nickname}, ${log.activity}, ${fmtDuration(log.duration_min)}, ${info.done} of ${info.total}`,
+      });
+    } catch (e) {
+      setError(`The stamp could not be made. ${e.message}`);
+    } finally {
+      setStamping('');
+    }
+  }
+  function saveStamp() {
+    const a = document.createElement('a');
+    a.href = stamp.url;
+    a.download = stamp.fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  async function shareStamp() {
+    if (!shareable) { saveStamp(); return; }
+    try {
+      await navigator.share({ files: [new File([stamp.blob], stamp.fileName, { type: 'image/jpeg' })] });
+    } catch (err) {
+      if (err && err.name !== 'AbortError') saveStamp();
+    }
+  }
+  function closeStamp() {
+    URL.revokeObjectURL(stamp.url);
+    setStamp(null);
   }
 
   const done = d ? d.goals.reduce((n, g) => n + g.done, 0) : 0;
@@ -71,7 +131,7 @@ export default function Member({ state, userId }) {
             <div className="label">Proof this week</div>
             {d.logs.length === 0 ? <div className="card sub">Nothing logged yet.</div> : null}
             <ErrorNote>{error}</ErrorNote>
-            {d.logs.map((l) => (
+            {d.logs.map((l, index) => (
               <div key={l.id} className="card row" style={{ padding: 12, alignItems: 'flex-start' }}>
                 <ProofThumb path={l.photo_path} label={`${d.nickname}, ${l.activity}, ${fmtDayTime(l.logged_at, d.timezone)}`} />
                 <div className="stack grow" style={{ gap: 4 }}>
@@ -82,7 +142,8 @@ export default function Member({ state, userId }) {
                     {l.flag_short ? <span className="badge flag">Under {state.settings.min_physical_minutes} min</span> : null}
                     {l.flag_same_day ? <span className="badge flag">Second that day</span> : null}
                   </div>
-                  <div className="row" style={{ gap: 16 }}>
+                  <div className="row wrap" style={{ gap: 16 }}>
+                    {d.is_me ? <button type="button" className="link-btn" disabled={Boolean(stamping)} onClick={() => restamp(l, index)}>{stamping === l.id ? 'Making stamp…' : 'Share stamp'}</button> : null}
                     {l.can_undo ? <button type="button" className="link-btn" onClick={() => undo(l)}>{d.is_me ? 'Undo' : 'Remove entry'}</button> : null}
                     {d.is_me || new Date(state.now).getTime() - new Date(l.logged_at).getTime() > state.settings.dispute_days * 86400000 ? null : <a className="link-btn" href={`#/dispute/new/log/${l.id}`}>Dispute</a>}
                   </div>
@@ -90,6 +151,18 @@ export default function Member({ state, userId }) {
               </div>
             ))}
           </div>
+
+          {stamp ? (
+            <div className="overlay" role="dialog" aria-modal="true" aria-label="Your stamp">
+              <img className="stamp-img" src={stamp.url} alt={stamp.alt} />
+              <div className="stack" style={{ width: '100%', maxWidth: 320 }}>
+                <button type="button" className="btn primary" onClick={shareStamp} autoFocus>
+                  <Icon name="share" color="var(--accent-ink)" width={2.4} />{shareable ? 'Share to the chat' : 'Save the image'}
+                </button>
+                <button type="button" className="btn" onClick={closeStamp}>Close</button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="stack">
             <div className="label">Recent weeks</div>

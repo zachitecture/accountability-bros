@@ -319,6 +319,14 @@ try {
   await page.getByText('Bench 80 kg x 5').waitFor(); // private note, shown only to Khov
   await page.waitForFunction(() => document.querySelectorAll('.thumb img').length >= 1);
   await shot(page, 'member');
+  // A past session's stamp can be made again and shared later.
+  await page.locator('.card', { hasText: 'Gym · 52 min' }).getByRole('button', { name: 'Share stamp' }).click();
+  const again = page.getByRole('dialog', { name: 'Your stamp' }).locator('img');
+  await again.waitFor();
+  assert.match(await again.getAttribute('alt'), /Khov, Gym, 52 min, 3 of 7/);
+  assert.deepEqual(await again.evaluate(async (img) => { await img.decode(); return [img.naturalWidth, img.naturalHeight]; }), [1080, 1440]);
+  await shot(page, 'restamp');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
   await page.getByRole('button', { name: 'Previous week' }).click();
   await page.getByText('Week of Mon 2 Nov').waitFor();
   await page.getByText('7 of 7 done').waitFor();
