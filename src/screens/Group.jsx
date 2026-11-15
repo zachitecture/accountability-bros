@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { rpc } from '../api.js';
 import { fmtDate, fmtDuration, plural } from '../format.js';
 import { ErrorNote, Head, Icon, Loading, useLoad } from '../ui.jsx';
+import Feed from './Feed.jsx';
 
 const PERIODS = [['week', 'This week'], ['month', 'This month'], ['all', 'All time']];
 
@@ -63,12 +64,14 @@ export default function Group({ state }) {
         title="The group"
         side={<div className="small soft">Ends Sun<br />11:59 pm</div>}
       />
-      <div className="seg" role="group" aria-label="What to show">
+      <div className="seg three" role="group" aria-label="What to show">
         <button type="button" aria-pressed={view === 'week'} onClick={() => setView('week')}>Tallies</button>
+        <button type="button" aria-pressed={view === 'feed'} onClick={() => setView('feed')}>Feed</button>
         <button type="button" aria-pressed={view === 'board'} onClick={() => setView('board')}>Leaderboard</button>
       </div>
 
       {view === 'board' ? <Leaderboard /> : null}
+      {view === 'feed' ? <Feed state={state} /> : null}
       {view === 'week' && load.loading && !load.data ? <Loading /> : null}
       {view === 'week' ? <ErrorNote onRetry={load.reload}>{load.error}</ErrorNote> : null}
 

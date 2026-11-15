@@ -104,6 +104,17 @@ alter table public.ledger add constraint ledger_status_check check (status in ('
 create unique index if not exists ledger_one_forfeit_per_week
   on public.ledger (user_id, week_start) where kind = 'forfeit';
 
+-- Reactions on the activity feed: one per member per activity (like, love, or "hmm").
+create table if not exists public.log_reactions (
+  log_id uuid not null references public.logs (id) on delete cascade,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  kind text not null check (kind in ('like', 'love', 'hmm')),
+  created_at timestamptz not null default now(),
+  primary key (log_id, user_id)
+);
+alter table public.log_reactions enable row level security;
+revoke all on table public.log_reactions from anon, authenticated;
+
 -- A week the Kitty managers have excused (leave, illness and so on).
 create table if not exists public.week_rulings (
   user_id uuid not null references public.profiles (id) on delete cascade,
@@ -933,6 +944,73 @@ begin
   return public.get_leave();
 end $$;
 
+-- ------------------------------------------------------------------ feed ---
+
+create or replace function public.reactions_json(p_log uuid, p_viewer uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'mine', (select r.kind from public.log_reactions r where r.log_id = p_log and r.user_id = p_viewer),
+    'like', (select coalesce(jsonb_agg(p.nickname order by r.created_at), '[]'::jsonb)
+             from public.log_reactions r join public.profiles p on p.id = r.user_id where r.log_id = p_log and r.kind = 'like'),
+    'love', (select coalesce(jsonb_agg(p.nickname order by r.created_at), '[]'::jsonb)
+             from public.log_reactions r join public.profiles p on p.id = r.user_id where r.log_id = p_log and r.kind = 'love'),
+    'hmm',  (select coalesce(jsonb_agg(p.nickname order by r.created_at), '[]'::jsonb)
+             from public.log_reactions r join public.profiles p on p.id = r.user_id where r.log_id = p_log and r.kind = 'hmm'))
+$$;
+
+-- Everyone's activities, newest first. Private notes are never included.
+create or replace function public.get_feed(p_before timestamptz default null, p_limit int default 20) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  v_limit int := least(greatest(coalesce(p_limit, 20), 1), 50);
+  v jsonb; v_last timestamptz;
+begin
+  select coalesce(jsonb_agg(x.j order by x.logged_at desc, x.id), '[]'::jsonb) into v
+  from (
+    select l.logged_at, l.id, jsonb_build_object(
+      'id', l.id, 'user_id', l.user_id, 'nickname', p.nickname, 'title', p.title, 'is_me', l.user_id = m.id,
+      'activity', g.activity, 'category', g.category, 'duration_min', l.duration_min,
+      'logged_at', l.logged_at, 'photo_path', l.photo_path,
+      'flag_short', l.flag_short, 'flag_same_day', l.flag_same_day,
+      'done', (select count(*) from public.logs l2 where l2.user_id = l.user_id and l2.week_start = l.week_start and l2.logged_at <= l.logged_at),
+      'total', (select coalesce(sum(g2.target), 0) from public.goals g2 where g2.user_id = l.user_id and g2.week_start = l.week_start),
+      'reactions', public.reactions_json(l.id, m.id)) as j
+    from public.logs l
+    join public.goals g on g.id = l.goal_id
+    join public.profiles p on p.id = l.user_id
+    where p.active and (p_before is null or l.logged_at < p_before)
+    order by l.logged_at desc, l.id
+    limit v_limit
+  ) x;
+  v_last := (v->-1->>'logged_at')::timestamptz;
+  return jsonb_build_object('items', v,
+    'more', v_last is not null and exists (
+      select 1 from public.logs l join public.profiles p on p.id = l.user_id where p.active and l.logged_at < v_last));
+end $$;
+
+-- React to someone else's activity. One reaction each: sending another kind
+-- switches it, and sending nothing removes it.
+create or replace function public.react_to_log(p_log_id uuid, p_kind text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  l public.logs; v_kind text := nullif(btrim(coalesce(p_kind, '')), '');
+begin
+  select * into l from public.logs where id = p_log_id;
+  if l.id is null then raise exception 'That activity was not found.'; end if;
+  if l.user_id = m.id then raise exception 'You cannot react to your own activity.'; end if;
+  if v_kind is null then
+    delete from public.log_reactions where log_id = l.id and user_id = m.id;
+  elsif v_kind not in ('like', 'love', 'hmm') then
+    raise exception 'Unknown reaction.';
+  else
+    insert into public.log_reactions (log_id, user_id, kind, created_at) values (l.id, m.id, v_kind, public.app_now())
+      on conflict (log_id, user_id) do update set kind = excluded.kind, created_at = excluded.created_at;
+  end if;
+  return public.reactions_json(l.id, m.id);
+end $$;
+
 -- ----------------------------------------------------------- leaderboard ---
 
 -- Most hours of physical activity: this week, this calendar month, or all time.
@@ -1453,11 +1531,11 @@ declare
   api text[] := array['get_state', 'join_group', 'update_my_profile', 'get_week', 'save_goals', 'log_activity',
     'undo_log', 'get_group', 'get_member', 'get_kitty', 'issue_forfeit', 'excuse_week', 'add_entry', 'set_paid',
     'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member',
-    'get_leave', 'request_leave', 'cancel_leave', 'decide_leave', 'get_leaderboard',
+    'get_leave', 'request_leave', 'cancel_leave', 'decide_leave', 'get_leaderboard', 'get_feed', 'react_to_log',
     'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
     'second_dispute', 'add_findings', 'decide_dispute', 'withdraw_dispute'];
   internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until',
-    'leave_days', 'on_leave', 'eligible_count', 'roll_goals', 'dispute_json', 'money_text'];
+    'leave_days', 'on_leave', 'eligible_count', 'roll_goals', 'dispute_json', 'money_text', 'reactions_json'];
 begin
   for r in
     select p.oid::regprocedure as sig, p.proname

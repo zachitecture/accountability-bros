@@ -119,6 +119,14 @@ h1, h2, p { margin: 0; }
 }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 a.link-btn { display: inline-flex; align-items: center; }
+.seg.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.feed-photo { display: block; width: 100%; aspect-ratio: 1 / 1; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: var(--surface-2); color: var(--text-2); }
+.feed-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.reacts { display: flex; gap: 8px; }
+.react { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; min-width: 60px; justify-content: center; padding: 0 12px; border-radius: 22px; border: 1.5px solid var(--line-strong); background: var(--surface); font-size: 18px; color: var(--text); }
+.react .n { font-size: 14px; font-weight: 700; }
+.react[aria-pressed='true'] { border-color: var(--accent); background: var(--selected); }
+.react:disabled { opacity: 1; border-color: var(--line); }
 .note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .rank { width: 28px; flex-shrink: 0; font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--text-2); }

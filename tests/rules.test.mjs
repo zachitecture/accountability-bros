@@ -413,6 +413,27 @@ await test('leaderboard: most hours of physical activity', async () => {
   await fails(call(rad, 'get_leaderboard', { p_period: 'year' }), /Unknown period/);
 });
 
+await test('feed: everyone\'s activities, one reaction each, never your own', async () => {
+  const f = await call(gilly, 'get_feed');
+  assert.equal(f.items[0].id, khovLog);
+  assert.equal(f.items[0].nickname, 'Khov');
+  assert.equal(f.items[0].done, 1);
+  assert.equal('note' in f.items[0], false); // private notes stay private
+  await fails(call(khov, 'react_to_log', { p_log_id: khovLog, p_kind: 'like' }), /your own activity/);
+  await fails(call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'boo' }), /Unknown reaction/);
+  let r = await call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'hmm' });
+  assert.equal(r.mine, 'hmm');
+  await call(rad, 'react_to_log', { p_log_id: khovLog, p_kind: 'love' });
+  r = await call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'like' }); // switches, does not add
+  assert.deepEqual([r.like, r.love, r.hmm], [['Gilly'], ['Rad'], []]);
+  r = await call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: null });
+  assert.deepEqual([r.mine, r.like], [null, []]);
+  assert.deepEqual((await call(khov, 'get_feed', { p_limit: 1 })).items[0].reactions.love, ['Rad']);
+  assert.equal((await call(khov, 'get_feed', { p_limit: 1 })).more, true);
+  await fails(asUser(khov, 'select * from public.log_reactions'), /permission denied/);
+  await fails(call(stranger, 'get_feed'), /not joined/);
+});
+
 await test('disputes: own forfeit, Ombudsman advice first, upheld so fee and forfeit are waived', async () => {
   await call(khov, 'update_member', { p_user: dija, p_patch: { is_ombudsman: true, title: 'Ombudsman' } });
   await call(khov, 'update_member', { p_user: rad, p_patch: { is_attorney: true, title: 'Attorney-General' } });

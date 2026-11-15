@@ -304,8 +304,14 @@ try {
   await page.getByRole('button', { name: 'All time' }).click();
   await page.locator('a.member').first().waitFor();
   assert.equal(await page.locator('a.member').count(), 14);
+  await page.getByRole('button', { name: 'Feed', exact: true }).click();
+  const top = page.locator('.feed-item').first();
+  await top.getByText('Gym · 52 min').waitFor();
+  assert.match(await top.innerText(), /Khov[\s\S]*3 \/ 7/);
+  assert.equal(await top.getByRole('button', { name: /^Like/ }).isDisabled(), true); // not your own
+  assert.equal(await page.getByText('Bench 80 kg x 5').count(), 0); // notes never reach the feed
   await page.getByRole('button', { name: 'Tallies' }).click();
-  ok('leaderboard: most hours this week and all time');
+  ok('leaderboard and feed');
 
   await mine.click();
   await page.getByRole('heading', { name: 'Khov' }).waitFor();
@@ -402,6 +408,20 @@ try {
   assert.equal(await p2.getByText('Bench 80 kg x 5').count(), 0); // Khov's note is private
   assert.ok(await p2.getByRole('link', { name: 'Dispute', exact: true }).count() > 0);
   ok('new member: join code enforced, no admin or Kitty controls');
+
+  // ---- the feed: Newbie gives Khov's session the questionable face, then changes it to a love
+  await p2.goto(`${APP}/#/group`);
+  await p2.getByRole('button', { name: 'Feed', exact: true }).click();
+  const post = p2.locator('.feed-item').first();
+  await post.getByText('Gym · 52 min').waitFor();
+  await post.getByRole('button', { name: /^Questionable/ }).click();
+  await post.getByText('🤨 Newbie').waitFor();
+  await post.getByRole('button', { name: /^Love/ }).click();
+  await post.getByText('❤️ Newbie').waitFor();
+  assert.equal(await post.getByText('🤨 Newbie').count(), 0);
+  await p2.waitForFunction(() => document.querySelector('.feed-photo img'));
+  await shot(p2, 'feed');
+  ok('feed: react to someone else\'s activity, one reaction each');
 
   // ---- leave: 10 days of sick leave from today (Tue 10 Nov). The first 7 stand, the Executive decides the rest.
   await p2.getByRole('link', { name: 'Goals', exact: true }).click();
