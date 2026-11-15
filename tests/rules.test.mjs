@@ -420,14 +420,18 @@ await test('feed: everyone\'s activities, one reaction each, never your own', as
   assert.equal(f.items[0].done, 1);
   assert.equal('note' in f.items[0], false); // private notes stay private
   await fails(call(khov, 'react_to_log', { p_log_id: khovLog, p_kind: 'like' }), /your own activity/);
-  await fails(call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'boo' }), /Unknown reaction/);
+  await fails(call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'like' }), /Unknown reaction/);
   let r = await call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'hmm' });
   assert.equal(r.mine, 'hmm');
   await call(rad, 'react_to_log', { p_log_id: khovLog, p_kind: 'love' });
-  r = await call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'like' }); // switches, does not add
-  assert.deepEqual([r.like, r.love, r.hmm], [['Gilly'], ['Rad'], []]);
+  r = await call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: 'love' }); // switches, does not add
+  assert.deepEqual([r.love, r.hmm], [['Gilly', 'Rad'], []]);
   r = await call(gilly, 'react_to_log', { p_log_id: khovLog, p_kind: null });
-  assert.deepEqual([r.mine, r.like], [null, []]);
+  assert.deepEqual([r.mine, r.love], [null, ['Rad']]);
+  // The Executive can see everyone's leave; other members only their own.
+  const allLeave = (await call(khov, 'get_leave')).all;
+  assert.ok(allLeave.some((x) => x.nickname === 'Dija' && x.kind === 'sick' && x.state === 'current'));
+  assert.deepEqual((await call(rad, 'get_leave')).all, []);
   assert.deepEqual((await call(khov, 'get_feed', { p_limit: 1 })).items[0].reactions.love, ['Rad']);
   assert.equal((await call(khov, 'get_feed', { p_limit: 1 })).more, true);
   await fails(asUser(khov, 'select * from public.log_reactions'), /permission denied/);

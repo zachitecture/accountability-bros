@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { configured, rpc, supabase } from './api.js';
-import { ErrorNote, Head, Icon, Loading, useRoute } from './ui.jsx';
+import { Catch, ErrorNote, Head, Icon, Loading, useRoute } from './ui.jsx';
 import { Auth, Join, NewPassword } from './screens/Auth.jsx';
 import Log from './screens/Log.jsx';
 import Goals from './screens/Goals.jsx';
@@ -103,7 +103,7 @@ export default function App() {
   let screen;
   if (page === 'leave') screen = <Leave />;
   else if (page === 'disputes') screen = <Disputes state={state} />;
-  else if (page === 'dispute' && a === 'new' && b) screen = <DisputeNew key={`${b}-${route[3] || ''}`} kind={b} ref={route[3] || null} />;
+  else if (page === 'dispute' && a === 'new' && b) screen = <DisputeNew key={`${b}-${route[3] || ''}`} kind={b} target={route[3] || null} />;
   else if (page === 'dispute' && a) screen = <Dispute key={a} state={state} id={a} />;
   else if (page === 'goals') screen = <Goals key={`${a || 'me'}-${b || ''}`} state={state} userId={a} week={b} />;
   else if (page === 'group') screen = <Group state={state} />;
@@ -113,5 +113,5 @@ export default function App() {
   else screen = <Log state={state} refresh={refresh} />;
 
   const active = page === 'member' ? 'group' : page === 'leave' ? 'goals' : page === 'disputes' || page === 'dispute' ? 'kitty' : page;
-  return <Shell tabs active={active}>{screen}</Shell>;
+  return <Shell tabs active={active}><Catch key={route.join('/')}>{screen}</Catch></Shell>;
 }

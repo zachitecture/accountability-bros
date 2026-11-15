@@ -3,7 +3,7 @@ import { proofUrl, rpc } from '../api.js';
 import { fmtDayTime, fmtDuration } from '../format.js';
 import { ErrorNote, Icon, Loading } from '../ui.jsx';
 
-const REACTIONS = [['like', '👍', 'Like'], ['love', '❤️', 'Love'], ['hmm', '🤨', 'Questionable']];
+const REACTIONS = [['love', '💙', 'Love'], ['hmm', '🤨', 'Questionable']];
 
 // The proof photo, loaded only once it is about to scroll into view. Tap for full size.
 function FeedPhoto({ path, label }) {

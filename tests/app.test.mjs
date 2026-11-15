@@ -308,7 +308,7 @@ try {
   const top = page.locator('.feed-item').first();
   await top.getByText('Gym · 52 min').waitFor();
   assert.match(await top.innerText(), /Khov[\s\S]*3 \/ 7/);
-  assert.equal(await top.getByRole('button', { name: /^Like/ }).isDisabled(), true); // not your own
+  assert.equal(await top.getByRole('button', { name: /^Love/ }).isDisabled(), true); // not your own
   assert.equal(await page.getByText('Bench 80 kg x 5').count(), 0); // notes never reach the feed
   await page.getByRole('button', { name: 'Tallies' }).click();
   ok('leaderboard and feed');
@@ -417,11 +417,24 @@ try {
   await post.getByRole('button', { name: /^Questionable/ }).click();
   await post.getByText('🤨 Newbie').waitFor();
   await post.getByRole('button', { name: /^Love/ }).click();
-  await post.getByText('❤️ Newbie').waitFor();
+  await post.getByText('💙 Newbie').waitFor();
+  assert.equal(await post.getByRole('button').count(), 3); // the photo, the heart, the questionable face
   assert.equal(await post.getByText('🤨 Newbie').count(), 0);
   await p2.waitForFunction(() => document.querySelector('.feed-photo img'));
   await shot(p2, 'feed');
   ok('feed: react to someone else\'s activity, one reaction each');
+
+  // Tapping Dispute on someone's session opens a draft about that session.
+  await p2.getByRole('button', { name: 'Tallies' }).click();
+  await p2.locator('a.member', { hasText: 'Khov' }).click();
+  await p2.getByRole('link', { name: 'Dispute', exact: true }).first().click();
+  await p2.getByRole('heading', { name: 'Draft' }).waitFor();
+  await p2.getByText(/^Khov: Gym, /).waitFor();
+  assert.equal(await p2.getByLabel('Another member seconds me').isChecked(), true);
+  await shot(p2, 'dispute-session');
+  await p2.getByRole('button', { name: 'Delete draft' }).click();
+  await p2.getByRole('heading', { name: 'Disputes' }).waitFor();
+  ok('dispute link on a session opens a draft');
 
   // ---- leave: 10 days of sick leave from today (Tue 10 Nov). The first 7 stand, the Executive decides the rest.
   await p2.getByRole('link', { name: 'Goals', exact: true }).click();
@@ -457,6 +470,7 @@ try {
   await shot(page, 'leave-approval');
   await page.getByRole('button', { name: 'Approve the rest' }).click();
   await page.getByText('Leave waiting for the Executive').waitFor({ state: 'detached' });
+  await page.locator('.card', { hasText: 'Newbie · Sick or injury leave' }).getByText('Approved · Rolled ankle').waitFor();
   await p2.goto(`${APP}/#/leave`);
   await p2.reload();
   await p2.getByText('You are on leave next week.').waitFor();

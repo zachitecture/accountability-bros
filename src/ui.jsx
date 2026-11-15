@@ -127,3 +127,20 @@ export function ProofThumb({ path, label }) {
     </>
   );
 }
+
+// If a screen crashes, show a message instead of a blank page.
+export class Catch extends React.Component {
+  constructor(props) { super(props); this.state = { failed: false }; }
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <main className="screen">
+        <div className="notice error" role="alert">
+          Something went wrong on this screen. Tell Khov what you tapped.
+          <div><button type="button" className="link-btn" onClick={() => window.location.reload()}>Reload the app</button></div>
+        </div>
+      </main>
+    );
+  }
+}

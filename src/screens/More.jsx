@@ -164,7 +164,8 @@ function LeaveApprovals() {
   const load = useLoad(() => rpc('get_leave'), []);
   const [error, setError] = useState('');
   const pending = (load.data && load.data.pending) || [];
-  if (pending.length === 0) return null;
+  const all = (load.data && load.data.all) || [];
+  if (!load.data) return null;
 
   async function decide(l, approve) {
     if (!window.confirm(`${approve ? 'Approve' : 'Decline'} the extra days of ${l.nickname}'s sick leave?`)) return;
@@ -179,7 +180,25 @@ function LeaveApprovals() {
 
   return (
     <div className="stack">
-      <div className="label">Leave waiting for the Executive</div>
+      <div className="label">Members' leave</div>
+      {all.length === 0 ? <div className="card sub">No one has leave now, coming up, or in the last 4 weeks.</div> : null}
+      {all.map((l) => (
+        <div key={l.id} className="card stack">
+          <div className="row between" style={{ alignItems: 'flex-start' }}>
+            <div className="stack" style={{ gap: 3 }}>
+              <span className="name" style={{ fontSize: 15 }}>{l.nickname} · {l.kind === 'annual' ? 'Annual leave' : 'Sick or injury leave'}</span>
+              <span className="sub">{l.start_date === l.end_date ? fmtDate(l.start_date) : `${fmtDate(l.start_date)} to ${fmtDate(l.end_date)}`}</span>
+            </div>
+            <span className="badge quiet">{l.state === 'past' ? 'Finished' : l.state === 'current' ? 'Now' : 'Upcoming'}</span>
+          </div>
+          <div className="small soft">
+            {l.status === 'pending' ? `First 7 days approved (to ${fmtDate(l.approved_until, false)}). The rest is waiting on the Executive.`
+              : l.status === 'declined' ? `Extra days declined. Counts up to ${fmtDate(l.approved_until, false)}.` : 'Approved'}
+            {l.note ? ` · ${l.note}` : ''}
+          </div>
+        </div>
+      ))}
+      {pending.length ? <div className="label">Leave waiting for the Executive</div> : null}
       <ErrorNote>{error}</ErrorNote>
       {pending.map((l) => (
         <div key={l.id} className="card stack">

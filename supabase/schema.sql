@@ -104,14 +104,18 @@ alter table public.ledger add constraint ledger_status_check check (status in ('
 create unique index if not exists ledger_one_forfeit_per_week
   on public.ledger (user_id, week_start) where kind = 'forfeit';
 
--- Reactions on the activity feed: one per member per activity (like, love, or "hmm").
+-- Reactions on the activity feed: one per member per activity (a heart, or "hmm").
 create table if not exists public.log_reactions (
   log_id uuid not null references public.logs (id) on delete cascade,
   user_id uuid not null references public.profiles (id) on delete cascade,
-  kind text not null check (kind in ('like', 'love', 'hmm')),
+  kind text not null,
   created_at timestamptz not null default now(),
   primary key (log_id, user_id)
 );
+-- There were three reactions at first; "like" is now folded into the heart.
+alter table public.log_reactions drop constraint if exists log_reactions_kind_check;
+update public.log_reactions set kind = 'love' where kind = 'like';
+alter table public.log_reactions add constraint log_reactions_kind_check check (kind in ('love', 'hmm'));
 alter table public.log_reactions enable row level security;
 revoke all on table public.log_reactions from anon, authenticated;
 
@@ -841,7 +845,7 @@ create or replace function public.get_leave() returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   m public.profiles := public.me();
-  s public.settings; v_today date; v_week date; v_mine jsonb; v_pending jsonb := '[]'::jsonb;
+  s public.settings; v_today date; v_week date; v_mine jsonb; v_pending jsonb := '[]'::jsonb; v_all jsonb := '[]'::jsonb;
 begin
   select * into s from public.settings where id = 1;
   v_today := (public.app_now() at time zone m.timezone)::date;
@@ -861,12 +865,22 @@ begin
       into v_pending
       from public.leave_requests l join public.profiles p on p.id = l.user_id
       where l.status = 'pending';
+    -- Everyone's leave that is current, upcoming, or finished in the last 4 weeks.
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'id', l.id, 'user_id', l.user_id, 'nickname', p.nickname, 'kind', l.kind,
+             'start_date', l.start_date, 'end_date', l.end_date, 'approved_until', l.approved_until,
+             'status', l.status, 'note', l.note,
+             'state', case when l.end_date < v_today then 'past' when l.start_date > v_today then 'upcoming' else 'current' end)
+             order by l.start_date desc, p.nickname), '[]'::jsonb)
+      into v_all
+      from public.leave_requests l join public.profiles p on p.id = l.user_id
+      where l.end_date >= v_today - 28;
   end if;
   return jsonb_build_object(
     'today', v_today, 'week_start', v_week, 'min_days', s.leave_min_days, 'is_admin', m.is_admin,
     'this_week', jsonb_build_object('days', public.leave_days(m.id, v_week), 'on_leave', public.on_leave(m.id, v_week)),
     'next_week', jsonb_build_object('days', public.leave_days(m.id, v_week + 7), 'on_leave', public.on_leave(m.id, v_week + 7)),
-    'leaves', v_mine, 'pending', v_pending);
+    'leaves', v_mine, 'pending', v_pending, 'all', v_all);
 end $$;
 
 -- Clause 9: annual leave is requested before it begins and cannot be refused.
@@ -950,9 +964,7 @@ create or replace function public.reactions_json(p_log uuid, p_viewer uuid) retu
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
     'mine', (select r.kind from public.log_reactions r where r.log_id = p_log and r.user_id = p_viewer),
-    'like', (select coalesce(jsonb_agg(p.nickname order by r.created_at), '[]'::jsonb)
-             from public.log_reactions r join public.profiles p on p.id = r.user_id where r.log_id = p_log and r.kind = 'like'),
-    'love', (select coalesce(jsonb_agg(p.nickname order by r.created_at), '[]'::jsonb)
+    'love', (select coalesce(jsonb_agg(p.nickname order by r.created_at, p.nickname), '[]'::jsonb)
              from public.log_reactions r join public.profiles p on p.id = r.user_id where r.log_id = p_log and r.kind = 'love'),
     'hmm',  (select coalesce(jsonb_agg(p.nickname order by r.created_at), '[]'::jsonb)
              from public.log_reactions r join public.profiles p on p.id = r.user_id where r.log_id = p_log and r.kind = 'hmm'))
@@ -1002,7 +1014,7 @@ begin
   if l.user_id = m.id then raise exception 'You cannot react to your own activity.'; end if;
   if v_kind is null then
     delete from public.log_reactions where log_id = l.id and user_id = m.id;
-  elsif v_kind not in ('like', 'love', 'hmm') then
+  elsif v_kind not in ('love', 'hmm') then
     raise exception 'Unknown reaction.';
   else
     insert into public.log_reactions (log_id, user_id, kind, created_at) values (l.id, m.id, v_kind, public.app_now())

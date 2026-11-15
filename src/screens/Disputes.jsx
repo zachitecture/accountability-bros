@@ -93,15 +93,15 @@ export function Disputes({ state }) {
 }
 
 // ---- #/dispute/new/<kind>/<ref>: open (or pick up) a draft, then show it
-export function DisputeNew({ kind, ref }) {
+export function DisputeNew({ kind, target }) {
   const [error, setError] = useState('');
   useEffect(() => {
     let live = true;
-    rpc('save_dispute', { p_id: null, p_kind: kind, p_ref: ref, p_standing: 'affected', p_seconder: null, p_grounds: '', p_evidence: '', p_evidence_paths: [] })
+    rpc('save_dispute', { p_id: null, p_kind: kind, p_ref: target, p_standing: 'affected', p_seconder: null, p_grounds: '', p_evidence: '', p_evidence_paths: [] })
       .then((d) => { if (live) window.location.replace(`#/dispute/${d.id}`); })
       .catch((e) => { if (live) setError(e.message); });
     return () => { live = false; };
-  }, [kind, ref]);
+  }, [kind, target]);
   return (
     <main className="screen">
       <a className="back" href="#/disputes"><Icon name="back" size={18} width={2.4} />Disputes</a>
