@@ -58,7 +58,9 @@ async function newPage() {
 async function shot(page, name) {
   step += 1;
   await page.waitForTimeout(250);
-  await page.screenshot({ path: join(out, `${String(step).padStart(2, '0')}-${name}.png`), fullPage: true });
+  // SHOT_VIEWPORT=1 takes just the top of the screen, as a phone shows it (used for the how-to guide).
+  if (process.env.SHOT_VIEWPORT) await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: join(out, `${String(step).padStart(2, '0')}-${name}.png`), fullPage: !process.env.SHOT_VIEWPORT });
 }
 const ok = (name) => console.log(`  ok  ${name}`);
 
@@ -383,6 +385,7 @@ try {
   await p2.getByRole('button', { name: 'Create account' }).click();
   await p2.getByRole('heading', { name: 'Join the group' }).waitFor();
   await p2.getByLabel('Your name in the group').fill('Newbie');
+  await shot(p2, 'join');
   await p2.getByLabel('Join code').fill('NOPE1234');
   await p2.getByRole('button', { name: 'Join', exact: true }).click();
   await p2.getByText('That join code is not right.').waitFor();
