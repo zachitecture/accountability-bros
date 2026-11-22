@@ -1,7 +1,62 @@
-import React, { useEffect, useState } from 'react';
-import { rpc, supabase } from '../api.js';
+import React, { useEffect, useRef, useState } from 'react';
+import { rpc, supabase, uploadProof } from '../api.js';
+import { squarePhoto } from '../image.js';
 import { fmtDate } from '../format.js';
-import { ErrorNote, Head, Loading, useLoad } from '../ui.jsx';
+import { Avatar, ErrorNote, Head, Loading, useLoad } from '../ui.jsx';
+
+// Profile picture: shown in the group, the feed and on your stamps.
+function ProfilePicture({ state, onState }) {
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const has = Boolean(state.me.avatar_path);
+
+  async function pick(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    setError('');
+    setBusy('Uploading…');
+    try {
+      const blob = await squarePhoto(file);
+      const path = await uploadProof(state.me.id, blob);
+      onState(await rpc('set_avatar', { p_path: path }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+  async function remove() {
+    setError('');
+    setBusy('Removing…');
+    try {
+      onState(await rpc('set_avatar', { p_path: null }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="row" style={{ gap: 14 }}>
+        <Avatar path={state.me.avatar_path} name={state.me.nickname} size={72} />
+        <div className="stack grow" style={{ gap: 6 }}>
+          <span className="label">Profile picture</span>
+          <span className="small soft">Shown in the group, the feed and on your stamps. The middle of the photo is used.</span>
+        </div>
+      </div>
+      <input ref={fileRef} className="sr" type="file" accept="image/*" onChange={pick} aria-label="Choose a profile picture" tabIndex={-1} />
+      <div className="actions">
+        <button type="button" className="btn small-btn" disabled={Boolean(busy)} onClick={() => fileRef.current.click()}>{busy || (has ? 'Change picture' : 'Add a picture')}</button>
+        {has ? <button type="button" className="btn small-btn" disabled={Boolean(busy)} onClick={remove}>Remove</button> : null}
+      </div>
+      <ErrorNote>{error}</ErrorNote>
+    </div>
+  );
+}
 
 function Profile({ state, email, onState }) {
   const [nickname, setNickname] = useState(state.me.nickname);
@@ -23,6 +78,7 @@ function Profile({ state, email, onState }) {
   return (
     <form className="card stack-lg" onSubmit={save}>
       <div className="name">You</div>
+      <ProfilePicture state={state} onState={onState} />
       <div className="field">
         <label className="label" htmlFor="my-name">Name in the group</label>
         <input id="my-name" className="input" maxLength={20} required value={nickname} onChange={(e) => { setNickname(e.target.value); setSaved(false); }} />

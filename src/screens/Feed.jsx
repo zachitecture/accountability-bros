@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { proofUrl, rpc } from '../api.js';
 import { fmtDayTime, fmtDuration } from '../format.js';
-import { ErrorNote, Icon, Loading } from '../ui.jsx';
+import { Avatar, ErrorNote, Icon, Loading } from '../ui.jsx';
 
 const REACTIONS = [['love', '💙', 'Love'], ['hmm', '🤨', 'Questionable']];
 
@@ -58,14 +58,19 @@ function Item({ item, state, onReactions }) {
   return (
     <article className="card stack feed-item">
       <div className="row between" style={{ alignItems: 'flex-start' }}>
-        <a href={`#/member/${item.user_id}`} className="stack" style={{ gap: 3, textDecoration: 'none', color: 'var(--text)' }}>
-          <span className="row wrap" style={{ gap: 8 }}>
-            <span className="name" style={{ fontSize: 15 }}>{item.nickname}</span>
-            {item.is_me ? <span className="badge you">You</span> : null}
+        <a href={`#/member/${item.user_id}`} className="row" style={{ gap: 10, textDecoration: 'none', color: 'var(--text)' }}>
+          <Avatar path={item.avatar_path} name={item.nickname} size={40} />
+          <span className="stack" style={{ gap: 3 }}>
+            <span className="row wrap" style={{ gap: 8 }}>
+              <span className="name" style={{ fontSize: 15 }}>{item.nickname}</span>
+              {item.is_me ? <span className="badge you">You</span> : null}
+            </span>
+            <span className="sub">{fmtDayTime(item.logged_at, state.me.timezone)}</span>
           </span>
-          <span className="sub">{fmtDayTime(item.logged_at, state.me.timezone)}</span>
         </a>
-        <span className="amount" aria-label={`${item.done} of ${item.total} this week`}>{item.done} / {item.total}</span>
+        {item.extra
+          ? <span className="badge extra">Extra</span>
+          : <span className="amount" aria-label={`${item.done} of ${item.total} this week`}>{item.done} / {item.total}</span>}
       </div>
       <div className="name" style={{ fontSize: 15 }}>{item.activity} · {fmtDuration(item.duration_min)}</div>
       {item.flag_short || item.flag_same_day ? (

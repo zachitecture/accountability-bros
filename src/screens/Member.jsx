@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { proofUrl, rpc } from '../api.js';
 import { makeStamp } from '../image.js';
 import { addDays, fmtDate, fmtDayTime, fmtDuration, plural } from '../format.js';
-import { ErrorNote, Head, Icon, Loading, ProofThumb, useLoad } from '../ui.jsx';
+import { Avatar, ErrorNote, Head, Icon, Loading, ProofThumb, avatarBlob, useLoad } from '../ui.jsx';
 
 function canShareFiles() {
   try {
@@ -44,15 +44,18 @@ export default function Member({ state, userId }) {
     try {
       const photo = await (await fetch(await proofUrl(log.photo_path))).blob();
       const info = {
-        ...log, nickname: d.nickname, timezone: d.timezone, done: index + 1,
+        ...log, nickname: d.nickname, timezone: d.timezone,
+        // The tally as it stood after this session (extras never count toward it).
+        done: d.logs.slice(0, index + 1).filter((x) => !x.extra).length,
         total: d.goals.reduce((n, g) => n + g.target, 0),
         group_name: state.settings.group_name, min_physical_minutes: state.settings.min_physical_minutes,
       };
-      const blob = await makeStamp(photo, info);
+      const blob = await makeStamp(photo, info, null, await avatarBlob(d.avatar_path));
+      const what = log.extra ? 'extra' : `${info.done}-of-${info.total}`;
       setStamp({
         blob, url: URL.createObjectURL(blob),
-        fileName: `${slug(d.nickname)}-${slug(log.activity)}-${info.done}-of-${info.total}.jpg`,
-        alt: `${d.nickname}, ${log.activity}, ${fmtDuration(log.duration_min)}, ${info.done} of ${info.total}`,
+        fileName: `${slug(d.nickname)}-${slug(log.activity)}-${what}.jpg`,
+        alt: `${d.nickname}, ${log.activity}, ${fmtDuration(log.duration_min)}, ${log.extra ? 'extra' : `${info.done} of ${info.total}`}`,
       });
     } catch (e) {
       setError(`The stamp could not be made. ${e.message}`);
@@ -93,11 +96,16 @@ export default function Member({ state, userId }) {
 
       {d ? (
         <>
-          <Head
-            eyebrow={d.title || 'Member'}
-            title={d.nickname}
-            side={<><div className="big-num">{d.streak}</div><div className="tiny muted">week streak</div></>}
-          />
+          <div className="row" style={{ gap: 14, alignItems: 'center' }}>
+            <Avatar path={d.avatar_path} name={d.nickname} size={64} />
+            <div className="grow">
+              <Head
+                eyebrow={d.title || 'Member'}
+                title={d.nickname}
+                side={<><div className="big-num">{d.streak}</div><div className="tiny muted">week streak</div></>}
+              />
+            </div>
+          </div>
 
           <div className="row between">
             <button type="button" className="icon-btn" aria-label="Previous week" onClick={() => setWeek(addDays(d.week_start, -7))}><Icon name="back" size={18} width={2.4} /></button>
@@ -139,6 +147,7 @@ export default function Member({ state, userId }) {
                   <div className="sub">{fmtDayTime(l.logged_at, d.timezone)}</div>
                   {l.note ? <div className="small soft note-text">{l.note}<span className="tiny muted"> · only you see this</span></div> : null}
                   <div className="row wrap" style={{ gap: 6 }}>
+                    {l.extra ? <span className="badge extra">Extra</span> : null}
                     {l.flag_short ? <span className="badge flag">Under {state.settings.min_physical_minutes} min</span> : null}
                     {l.flag_same_day ? <span className="badge flag">Second that day</span> : null}
                   </div>

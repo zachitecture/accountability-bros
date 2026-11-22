@@ -45,6 +45,8 @@ create table if not exists public.profiles (
 -- and the Attorney-General can lodge a dispute without a seconder.
 alter table public.profiles add column if not exists is_ombudsman boolean not null default false;
 alter table public.profiles add column if not exists is_attorney boolean not null default false;
+-- Profile picture, stored in the private photo store under the member's own folder.
+alter table public.profiles add column if not exists avatar_path text;
 
 create table if not exists public.goals (
   id uuid primary key default gen_random_uuid(),
@@ -82,6 +84,17 @@ create table if not exists public.logs (
 create index if not exists logs_user_week on public.logs (user_id, week_start);
 -- A private note: only the member who logged the session ever sees it. Never on the stamp.
 alter table public.logs add column if not exists note text not null default '';
+-- Extras: a session that is not one of the member's goals. It has no goal, carries its own
+-- activity name and type, never counts toward the weekly tally, and does count toward the
+-- leaderboard when it is physical.
+alter table public.logs add column if not exists extra boolean not null default false;
+alter table public.logs add column if not exists activity text;
+alter table public.logs add column if not exists category text;
+alter table public.logs alter column goal_id drop not null;
+alter table public.logs drop constraint if exists logs_extra_shape;
+alter table public.logs add constraint logs_extra_shape check (
+  (extra and goal_id is null and activity is not null and category in ('physical', 'lifestyle', 'recovery'))
+  or (not extra and goal_id is not null));
 create index if not exists logs_goal on public.logs (goal_id);
 
 create table if not exists public.ledger (
@@ -369,6 +382,7 @@ begin
   return jsonb_build_object(
     'member', true,
     'me', jsonb_build_object('id', p.id, 'nickname', p.nickname, 'title', p.title, 'timezone', p.timezone,
+      'avatar_path', p.avatar_path,
       'eligible', p.eligible, 'is_admin', p.is_admin, 'can_manage_kitty', p.can_manage_kitty,
       'is_ombudsman', p.is_ombudsman, 'is_attorney', p.is_attorney),
     'settings', jsonb_build_object('group_name', s.group_name, 'min_goals', s.min_goals,
@@ -454,13 +468,13 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
            'week_start', w.d,
            'declared', (select coalesce(sum(g.target), 0) from public.goals g where g.user_id = t.id and g.week_start = w.d),
-           'done', (select count(*) from public.logs l where l.user_id = t.id and l.week_start = w.d))
+           'done', (select count(*) from public.logs l where l.user_id = t.id and l.week_start = w.d and not l.extra))
            order by w.d), '[]'::jsonb)
     into v_hist
     from (select (v_week - 7 * i) as d from generate_series(1, 4) as i) w;
 
   return jsonb_build_object(
-    'user_id', t.id, 'nickname', t.nickname, 'title', t.title, 'timezone', t.timezone,
+    'user_id', t.id, 'nickname', t.nickname, 'title', t.title, 'timezone', t.timezone, 'avatar_path', t.avatar_path,
     'week_start', v_week, 'current_week', v_cur, 'lock_at', v_lock,
     'editable', public.edit_until(t.id, v_week) is not null, 'edit_until', public.edit_until(t.id, v_week),
     'goals', v_goals, 'reason', v_reason, 'history', v_hist,
@@ -600,14 +614,74 @@ begin
     returning * into v_log;
 
   select coalesce(sum(target), 0) into v_week_total from public.goals where user_id = m.id and week_start = v_cur;
-  select count(*) into v_week_done from public.logs where user_id = m.id and week_start = v_cur;
+  select count(*) into v_week_done from public.logs where user_id = m.id and week_start = v_cur and not extra;
 
   return jsonb_build_object(
     'id', v_log.id, 'logged_at', v_log.logged_at, 'duration_min', v_log.duration_min,
-    'flag_short', v_short, 'flag_same_day', v_same,
+    'flag_short', v_short, 'flag_same_day', v_same, 'extra', false, 'avatar_path', m.avatar_path,
     'activity', g.activity, 'category', g.category, 'nickname', m.nickname, 'timezone', m.timezone,
     'done', v_week_done, 'total', v_week_total, 'goal_done', v_done + 1, 'goal_target', g.target,
     'group_name', s.group_name, 'min_physical_minutes', s.min_physical_minutes);
+end $$;
+
+-- Record an extra session: something done this week that is not one of the member's
+-- goals. Same proof rules as any session. It never changes the weekly tally.
+create or replace function public.log_extra(p_activity text, p_category text, p_duration int, p_photo_path text, p_note text default '') returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  s public.settings; v_log public.logs;
+  v_activity text := btrim(coalesce(p_activity, ''));
+  v_category text := coalesce(p_category, 'physical');
+  v_cur date; v_day date; v_week_done int; v_week_total int;
+begin
+  perform public.roll_goals();
+  select * into s from public.settings where id = 1;
+  if length(v_activity) < 1 or length(v_activity) > 40 then
+    raise exception 'Say what you did (up to 40 characters).';
+  end if;
+  if v_category not in ('physical', 'lifestyle', 'recovery') then raise exception 'Unknown activity type.'; end if;
+  if p_duration is null or p_duration < 1 or p_duration > 1440 then
+    raise exception 'Enter how many minutes it took.';
+  end if;
+  if p_photo_path is null or p_photo_path not like (m.id::text || '/%') then
+    raise exception 'A proof photo is required.';
+  end if;
+  if exists (select 1 from public.logs where photo_path = p_photo_path) then
+    raise exception 'That photo has already been used.';
+  end if;
+  v_cur := public.week_of(m.timezone);
+  v_day := (public.app_now() at time zone m.timezone)::date;
+  insert into public.logs (user_id, goal_id, extra, activity, category, week_start, local_day, duration_min, photo_path,
+                           flag_short, flag_same_day, logged_at, note)
+    values (m.id, null, true, v_activity, v_category, v_cur, v_day, p_duration, p_photo_path,
+            false, false, public.app_now(), left(btrim(coalesce(p_note, '')), 500))
+    returning * into v_log;
+  select coalesce(sum(target), 0) into v_week_total from public.goals where user_id = m.id and week_start = v_cur;
+  select count(*) into v_week_done from public.logs where user_id = m.id and week_start = v_cur and not extra;
+  return jsonb_build_object(
+    'id', v_log.id, 'logged_at', v_log.logged_at, 'duration_min', v_log.duration_min,
+    'flag_short', false, 'flag_same_day', false, 'extra', true, 'avatar_path', m.avatar_path,
+    'activity', v_activity, 'category', v_category, 'nickname', m.nickname, 'timezone', m.timezone,
+    'done', v_week_done, 'total', v_week_total,
+    'group_name', s.group_name, 'min_physical_minutes', s.min_physical_minutes);
+end $$;
+
+-- Profile picture: a photo the member uploaded to their own folder, or null to remove it.
+create or replace function public.set_avatar(p_path text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  v_path text := nullif(btrim(coalesce(p_path, '')), '');
+begin
+  if v_path is not null then
+    if v_path not like (m.id::text || '/%') then raise exception 'That photo is not yours.'; end if;
+    if not exists (select 1 from storage.objects where bucket_id = 'proof' and name = v_path) then
+      raise exception 'That photo did not upload. Try again.';
+    end if;
+  end if;
+  update public.profiles set avatar_path = v_path where id = m.id;
+  return public.get_state();
 end $$;
 
 -- A member can undo their own entry for 15 minutes (wrong goal, wrong photo).
@@ -645,9 +719,10 @@ begin
     select p.sort_order as so, p.joined_at as ja,
       jsonb_build_object(
         'id', p.id, 'nickname', p.nickname, 'title', p.title, 'eligible', p.eligible, 'is_me', p.id = m.id,
-        'week_start', w.wk,
+        'avatar_path', p.avatar_path, 'week_start', w.wk,
         'total', (select coalesce(sum(g.target), 0) from public.goals g where g.user_id = p.id and g.week_start = w.wk),
-        'done', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk),
+        'done', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk and not l.extra),
+        'extras', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk and l.extra),
         'flags', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk and (l.flag_short or l.flag_same_day)),
         'reason', (select n.reason from public.week_notes n where n.user_id = p.id and n.week_start = w.wk),
         'on_leave', public.on_leave(p.id, w.wk),
@@ -669,7 +744,8 @@ begin
   v_week := (v_base->>'week_start')::date;
   v_user := (v_base->>'user_id')::uuid;
   select coalesce(jsonb_agg(jsonb_build_object(
-           'id', l.id, 'activity', g.activity, 'category', g.category, 'duration_min', l.duration_min,
+           'id', l.id, 'activity', coalesce(g.activity, l.activity), 'category', coalesce(g.category, l.category),
+           'extra', l.extra, 'duration_min', l.duration_min,
            'logged_at', l.logged_at, 'photo_path', l.photo_path,
            'flag_short', l.flag_short, 'flag_same_day', l.flag_same_day,
            'note', case when l.user_id = m.id then l.note else '' end,
@@ -677,7 +753,7 @@ begin
                        or (m.is_admin and l.user_id <> m.id))
            order by l.logged_at), '[]'::jsonb)
     into v_logs
-    from public.logs l join public.goals g on g.id = l.goal_id
+    from public.logs l left join public.goals g on g.id = l.goal_id
     where l.user_id = v_user and l.week_start = v_week;
   return v_base || jsonb_build_object(
     'logs', v_logs,
@@ -724,7 +800,7 @@ begin
       from (
         select p.id, p.nickname, w.wk,
           (select coalesce(sum(g.target), 0) from public.goals g where g.user_id = p.id and g.week_start = w.wk) as total,
-          (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk) as done
+          (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk and not l.extra) as done
         from public.profiles p
         cross join generate_series(1, 4) as i
         cross join lateral (select public.week_of(p.timezone) - 7 * i as wk) w
@@ -982,14 +1058,16 @@ begin
   from (
     select l.logged_at, l.id, jsonb_build_object(
       'id', l.id, 'user_id', l.user_id, 'nickname', p.nickname, 'title', p.title, 'is_me', l.user_id = m.id,
-      'activity', g.activity, 'category', g.category, 'duration_min', l.duration_min,
+      'avatar_path', p.avatar_path, 'extra', l.extra,
+      'activity', coalesce(g.activity, l.activity), 'category', coalesce(g.category, l.category), 'duration_min', l.duration_min,
       'logged_at', l.logged_at, 'photo_path', l.photo_path,
       'flag_short', l.flag_short, 'flag_same_day', l.flag_same_day,
-      'done', (select count(*) from public.logs l2 where l2.user_id = l.user_id and l2.week_start = l.week_start and l2.logged_at <= l.logged_at),
+      'done', (select count(*) from public.logs l2 where l2.user_id = l.user_id and l2.week_start = l.week_start
+                 and l2.logged_at <= l.logged_at and not l2.extra),
       'total', (select coalesce(sum(g2.target), 0) from public.goals g2 where g2.user_id = l.user_id and g2.week_start = l.week_start),
       'reactions', public.reactions_json(l.id, m.id)) as j
     from public.logs l
-    join public.goals g on g.id = l.goal_id
+    left join public.goals g on g.id = l.goal_id
     join public.profiles p on p.id = l.user_id
     where p.active and (p_before is null or l.logged_at < p_before)
     order by l.logged_at desc, l.id
@@ -1039,17 +1117,17 @@ begin
   if v_period not in ('week', 'month', 'all') then raise exception 'Unknown period.'; end if;
   v_from := v_month::timestamp at time zone m.timezone;
   select coalesce(jsonb_agg(jsonb_build_object(
-           'id', x.id, 'nickname', x.nickname, 'title', x.title, 'is_me', x.id = m.id,
+           'id', x.id, 'nickname', x.nickname, 'title', x.title, 'is_me', x.id = m.id, 'avatar_path', x.avatar_path,
            'minutes', x.minutes, 'sessions', x.sessions, 'rank', x.rk)
            order by x.rk, x.nickname), '[]'::jsonb)
     into v
   from (
-    select p.id, p.nickname, p.title, t.minutes, t.sessions, rank() over (order by t.minutes desc) as rk
+    select p.id, p.nickname, p.title, p.avatar_path, t.minutes, t.sessions, rank() over (order by t.minutes desc) as rk
     from public.profiles p
     cross join lateral (
       select coalesce(sum(l.duration_min), 0)::int as minutes, count(l.id)::int as sessions
-      from public.logs l join public.goals g on g.id = l.goal_id
-      where l.user_id = p.id and g.category = 'physical'
+      from public.logs l left join public.goals g on g.id = l.goal_id
+      where l.user_id = p.id and coalesce(g.category, l.category) = 'physical'
         and (v_period = 'all'
           or (v_period = 'week' and l.week_start = v_week)
           or (v_period = 'month' and l.logged_at >= v_from))) t
@@ -1207,7 +1285,8 @@ begin
       select * into g from public.goals where id = l.goal_id;
       select * into t from public.profiles where id = l.user_id;
       d.log_id := l.id; d.subject_user := l.user_id; d.ref_at := l.logged_at;
-      d.subject_label := t.nickname || ': ' || g.activity || ', ' || l.duration_min || ' min, '
+      d.subject_label := t.nickname || ': ' || coalesce(g.activity, l.activity) || case when l.extra then ' (extra)' else '' end
+                         || ', ' || l.duration_min || ' min, '
                          || to_char(l.logged_at at time zone t.timezone, 'Dy FMDD Mon FMHH12:MI am');
     elsif p_kind = 'goals' then
       select * into t from public.profiles where id = nullif(split_part(coalesce(p_ref, ''), ':', 1), '')::uuid;
@@ -1544,7 +1623,7 @@ declare
     'undo_log', 'get_group', 'get_member', 'get_kitty', 'issue_forfeit', 'excuse_week', 'add_entry', 'set_paid',
     'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member',
     'get_leave', 'request_leave', 'cancel_leave', 'decide_leave', 'get_leaderboard', 'get_feed', 'react_to_log',
-    'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
+    'log_extra', 'set_avatar', 'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
     'second_dispute', 'add_findings', 'decide_dispute', 'withdraw_dispute'];
   internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until',
     'leave_days', 'on_leave', 'eligible_count', 'roll_goals', 'dispute_json', 'money_text', 'reactions_json'];

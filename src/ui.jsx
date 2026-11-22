@@ -103,6 +103,34 @@ export function Tick({ children, warn }) {
   );
 }
 
+// A member's profile picture, or their initial when they have none.
+export function Avatar({ path, name = '', size = 40 }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    setUrl('');
+    if (!path) return undefined;
+    let live = true;
+    proofUrl(path).then((u) => { if (live) setUrl(u); }).catch(() => {});
+    return () => { live = false; };
+  }, [path]);
+  const initial = String(name).trim().charAt(0).toUpperCase() || '?';
+  return (
+    <span className="avatar" aria-hidden="true" style={{ width: size, height: size, fontSize: Math.round(size * 0.42) }}>
+      {url ? <img src={url} alt="" /> : initial}
+    </span>
+  );
+}
+
+// The profile picture as a file, for drawing on a stamp. Null if there is none.
+export async function avatarBlob(path) {
+  if (!path) return null;
+  try {
+    return await (await fetch(await proofUrl(path))).blob();
+  } catch {
+    return null;
+  }
+}
+
 // A proof photo from private storage. Tap to see it full size.
 export function ProofThumb({ path, label }) {
   const [url, setUrl] = useState('');

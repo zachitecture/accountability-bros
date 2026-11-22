@@ -206,6 +206,15 @@ try {
       (${lit(khov)}, ${lit(gid['Soccer training'])}, '2026-11-09', '2026-11-09', 90, ${lit(`${khov}/seed-b.jpg`)}, '2026-11-09T09:00:00Z');
   `);
 
+  // ---- a profile picture, which then appears on stamps
+  await page.goto(`${APP}/#/more`);
+  await page.getByText('Profile picture', { exact: true }).waitFor();
+  await page.setInputFiles('input[aria-label="Choose a profile picture"]', selfiePath);
+  await page.getByRole('button', { name: 'Change picture' }).waitFor();
+  await page.waitForFunction(() => document.querySelector('.avatar img'));
+  await shot(page, 'profile-picture');
+  ok('profile picture: upload and show it');
+
   // ---- Tuesday 6:14 pm: goals are locked, log a gym session
   await fake.setNow(TUE_614PM);
   await page.goto(`${APP}/#/goals`);
@@ -287,6 +296,32 @@ try {
   await page.getByText('3 / 7').waitFor();
   ok('hours and minutes: 01:30 logs 90 minutes');
 
+  // An extra: not one of the goals. The tally stays at 3/7 and the stamp says EXTRA.
+  await fake.setNow('2026-11-10T08:30:00Z'); // 7:30 pm
+  await page.getByRole('button', { name: /^Something extra/ }).click();
+  await page.getByRole('button', { name: 'Hike', exact: true }).click();
+  assert.equal(await page.getByLabel('What did you do?').inputValue(), 'Hike');
+  await page.getByLabel('Hours').fill('2');
+  await page.getByLabel('Minutes').fill('0');
+  await page.setInputFiles('input[aria-label="Take a proof photo"]', photoPath);
+  await page.getByText('Photo added').waitFor();
+  await shot(page, 'log-extra');
+  await page.getByRole('button', { name: /Stamp it/ }).click();
+  await page.getByRole('heading', { name: 'Your stamp' }).waitFor();
+  await page.getByText('Extra activity', { exact: true }).waitFor();
+  await page.getByText('An extra, so your weekly tally stays at 3 / 7').waitFor();
+  await page.getByText('2 h added to the leaderboard').waitFor();
+  assert.match(await page.locator('img.stamp-img').getAttribute('alt'), /Khov, Hike, 2 h, extra/);
+  const extraB64 = await page.evaluate(async () => {
+    const buf = await (await fetch(document.querySelector('img.stamp-img').src)).arrayBuffer();
+    let s = ''; new Uint8Array(buf).forEach((b) => { s += String.fromCharCode(b); });
+    return btoa(s);
+  });
+  writeFileSync(join(out, 'stamp-extra.jpg'), Buffer.from(extraB64, 'base64'));
+  await page.getByRole('button', { name: 'Log another' }).click();
+  await page.getByText('3 / 7').waitFor();
+  ok('extra: logged outside the goals, tally unchanged, stamp says EXTRA');
+
   // ---- the group and a member's record
   await page.getByRole('link', { name: 'Group' }).click();
   await page.getByRole('heading', { name: 'The group' }).waitFor();
@@ -297,17 +332,22 @@ try {
   assert.match(await page.locator('a.member', { hasText: 'Manny' }).innerText(), /1 \/ 5[\s\S]*3/);
   assert.match(await page.locator('a.member', { hasText: 'Rad' }).innerText(), /1 \/ 4[\s\S]*0/);
   await shot(page, 'group');
-  ok('group lists all 14 with tallies and streaks');
+  await mine.getByText('+1 extra').waitFor();
+  assert.equal(await mine.locator('.avatar img').count(), 1);
+  ok('group lists all 14 with tallies, streaks, extras and pictures');
 
   await page.getByRole('button', { name: 'Leaderboard' }).click();
   const khovRow = page.locator('a.member', { hasText: 'Khov' });
-  await khovRow.getByText('3 h 23 min').waitFor(); // 61 + 90 + 52 minutes of physical sessions
+  await khovRow.getByText('5 h 23 min').waitFor(); // 61 + 90 + 52 minutes of goals, plus the 2-hour extra hike
   await shot(page, 'leaderboard');
   await page.getByRole('button', { name: 'All time' }).click();
   await page.locator('a.member').first().waitFor();
   assert.equal(await page.locator('a.member').count(), 14);
   await page.getByRole('button', { name: 'Feed', exact: true }).click();
-  const top = page.locator('.feed-item').first();
+  const first = page.locator('.feed-item').first();
+  await first.getByText('Hike · 2 h').waitFor();
+  await first.getByText('Extra', { exact: true }).waitFor();
+  const top = page.locator('.feed-item', { hasText: 'Gym · 52 min' });
   await top.getByText('Gym · 52 min').waitFor();
   assert.match(await top.innerText(), /Khov[\s\S]*3 \/ 7/);
   assert.equal(await top.getByRole('button', { name: /^Love/ }).isDisabled(), true); // not your own
@@ -396,7 +436,7 @@ try {
   // Joined on Tuesday, after the lock: gets 24 hours to set this first week.
   await p2.getByText('You joined part-way through the week').waitFor();
   await p2.getByRole('link', { name: 'Declare this week' }).click();
-  await p2.getByText('You joined mid-week, so you can set this week\'s goals until Wed 11 Nov, 6:14 pm').waitFor();
+  await p2.getByText('You joined mid-week, so you can set this week\'s goals until Wed 11 Nov, 7:30 pm').waitFor();
   await p2.getByRole('button', { name: 'Gym', exact: true }).click();
   for (let i = 0; i < 2; i += 1) await p2.getByRole('button', { name: 'One more Gym' }).click();
   await p2.getByRole('button', { name: 'Save 3 goals' }).click();
@@ -423,7 +463,7 @@ try {
   // ---- the feed: Newbie gives Khov's session the questionable face, then changes it to a love
   await p2.goto(`${APP}/#/group`);
   await p2.getByRole('button', { name: 'Feed', exact: true }).click();
-  const post = p2.locator('.feed-item').first();
+  const post = p2.locator('.feed-item', { hasText: 'Gym · 52 min' });
   await post.getByText('Gym · 52 min').waitFor();
   await post.getByRole('button', { name: /^Questionable/ }).click();
   await post.getByText('🤨 Newbie').waitFor();

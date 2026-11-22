@@ -438,6 +438,54 @@ await test('feed: everyone\'s activities, one reaction each, never your own', as
   await fails(call(stranger, 'get_feed'), /not joined/);
 });
 
+await test('extras: not in the tally, physical ones count on the leaderboard, disputable', async () => {
+  const khovRow = async (who) => (await call(who, 'get_group')).members.find((m) => m.nickname === 'Khov');
+  const hours = async () => (await call(khov, 'get_leaderboard', { p_period: 'week' })).members.find((m) => m.nickname === 'Khov').minutes;
+  const before = await khovRow(khov);
+  const minutesBefore = await hours();
+  await fails(call(khov, 'log_extra', { p_activity: ' ', p_category: 'physical', p_duration: 30, p_photo_path: `${khov}/x0.jpg` }), /Say what you did/);
+  await fails(call(khov, 'log_extra', { p_activity: 'Hike', p_category: 'physical', p_duration: 30, p_photo_path: `${rad}/x0.jpg` }), /proof photo/);
+  await fails(call(khov, 'log_extra', { p_activity: 'Hike', p_category: 'cardio', p_duration: 30, p_photo_path: `${khov}/x0.jpg` }), /Unknown activity type/);
+  await setNow('2026-11-30T02:00:30Z');
+  const hike = await call(khov, 'log_extra', { p_activity: 'Hike', p_category: 'physical', p_duration: 120, p_photo_path: `${khov}/x1.jpg`, p_note: 'Dandenongs' });
+  assert.equal(hike.extra, true);
+  assert.deepEqual([hike.done, hike.total], [before.done, before.total]); // the tally does not move
+  await fails(call(khov, 'log_extra', { p_activity: 'Hike', p_category: 'physical', p_duration: 30, p_photo_path: `${khov}/x1.jpg` }), /already been used/);
+  await setNow('2026-11-30T02:01:00Z');
+  const read = await call(khov, 'log_extra', { p_activity: 'Reading', p_category: 'lifestyle', p_duration: 30, p_photo_path: `${khov}/x2.jpg` });
+  const after = await khovRow(gilly);
+  assert.deepEqual([after.done, after.total, after.extras], [before.done, before.total, 2]);
+  assert.equal(await hours(), minutesBefore + 120); // physical extras count, lifestyle ones do not
+  const feed = (await call(gilly, 'get_feed', { p_limit: 2 })).items;
+  assert.deepEqual(feed.map((i) => [i.activity, i.extra, i.category]), [['Reading', true, 'lifestyle'], ['Hike', true, 'physical']]);
+  const mine = (await call(khov, 'get_member', { p_user: khov })).logs.filter((l) => l.extra);
+  assert.deepEqual(mine.map((l) => [l.activity, l.note]), [['Hike', 'Dandenongs'], ['Reading', '']]);
+  // Extras can be disputed like any session, and undone within 15 minutes.
+  const d = await call(gilly, 'save_dispute', { p_kind: 'log', p_ref: hike.id, p_standing: 'seconded', p_grounds: 'Two hours, really?' });
+  assert.match(d.subject_label, /^Khov: Hike \(extra\), 120 min, Mon 30 Nov/);
+  await call(gilly, 'delete_dispute', { p_id: d.id });
+  await call(khov, 'undo_log', { p_log_id: hike.id });
+  await call(khov, 'undo_log', { p_log_id: read.id });
+  assert.equal((await khovRow(khov)).extras, 0);
+});
+
+await test('profile pictures: your own uploaded photo, shown to the group', async () => {
+  await fails(call(khov, 'set_avatar', { p_path: `${rad}/face.jpg` }), /not yours/);
+  await fails(call(khov, 'set_avatar', { p_path: `${khov}/missing.jpg` }), /did not upload/);
+  await asUser(khov, `insert into storage.objects (bucket_id, name) values ('proof', '${khov}/face.jpg')`);
+  const s = await call(khov, 'set_avatar', { p_path: `${khov}/face.jpg` });
+  assert.equal(s.me.avatar_path, `${khov}/face.jpg`);
+  assert.equal((await call(rad, 'get_group')).members.find((m) => m.nickname === 'Khov').avatar_path, `${khov}/face.jpg`);
+  assert.equal((await call(rad, 'get_feed', { p_limit: 1 })).items[0].avatar_path, `${khov}/face.jpg`);
+  assert.equal((await call(rad, 'get_member', { p_user: khov })).avatar_path, `${khov}/face.jpg`);
+  assert.equal((await call(rad, 'get_leaderboard')).members.find((m) => m.nickname === 'Khov').avatar_path, `${khov}/face.jpg`);
+  const l = await call(khov, 'log_extra', { p_activity: 'Walk', p_category: 'physical', p_duration: 30, p_photo_path: `${khov}/x3.jpg` });
+  assert.equal(l.avatar_path, `${khov}/face.jpg`); // goes on the stamp
+  await call(khov, 'undo_log', { p_log_id: l.id });
+  assert.equal((await call(khov, 'set_avatar', { p_path: null })).me.avatar_path, null);
+  await db.query(`delete from storage.objects where name = '${khov}/face.jpg'`);
+});
+
 await test('disputes: own forfeit, Ombudsman advice first, upheld so fee and forfeit are waived', async () => {
   await call(khov, 'update_member', { p_user: dija, p_patch: { is_ombudsman: true, title: 'Ombudsman' } });
   await call(khov, 'update_member', { p_user: rad, p_patch: { is_attorney: true, title: 'Attorney-General' } });

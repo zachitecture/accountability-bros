@@ -41,6 +41,16 @@ export async function compressPhoto(file, maxSide = 1440) {
   return toJpeg(canvas, 0.8);
 }
 
+// Profile pictures: cut to a square from the middle of the photo, 512px across.
+export async function squarePhoto(file, side = 512) {
+  const img = await loadImage(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = side;
+  canvas.height = side;
+  drawCover(canvas.getContext('2d'), img, 0, 0, side, side);
+  return toJpeg(canvas, 0.85);
+}
+
 function drawCover(ctx, img, x, y, w, h) {
   const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight);
   const sw = w / scale;
@@ -85,8 +95,10 @@ function hexA(hex, alpha) {
 // Build the image that goes to the chat. The photo fills a 3:4 frame (the shape a
 // phone takes in portrait) and the details sit on a see-through bar at the bottom.
 // Reading order by size: tally, name, activity, duration, date and time, group name.
-// An optional selfie is inset over the top-left of the photo.
-export async function makeStamp(photoBlob, log, selfieBlob = null) {
+// An optional selfie is inset over the top-left of the photo, and the member's profile
+// picture (if they have one) sits in a circle beside their name. An extra session shows
+// EXTRA where the tally goes, because it does not count toward the week.
+export async function makeStamp(photoBlob, log, selfieBlob = null, avatarBlob = null) {
   const W = 1080;
   const H = 1440;
   const c = stampColours();
@@ -173,19 +185,46 @@ export async function makeStamp(photoBlob, log, selfieBlob = null) {
   ctx.fillRect(0, top, W, BAR);
 
   ctx.textAlign = 'right';
-  ctx.font = `700 172px ${DISPLAY}`;
   ctx.fillStyle = c.POP;
-  ctx.fillText(tally, W - 48, H - 54);
-  const leftMax = W - 48 - ctx.measureText(tally).width - 48 - 36;
+  let tallyW;
+  if (log.extra) {
+    ctx.font = `700 92px ${DISPLAY}`;
+    ctx.fillText('EXTRA', W - 48, H - 86);
+    tallyW = ctx.measureText('EXTRA').width;
+  } else {
+    ctx.font = `700 172px ${DISPLAY}`;
+    ctx.fillText(tally, W - 48, H - 54);
+    tallyW = ctx.measureText(tally).width;
+  }
+
+  let x = 48;
+  if (avatarBlob) {
+    try {
+      const face = await loadImage(avatarBlob);
+      const d = 148; const ay = top + (BAR - d) / 2;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x + d / 2, ay + d / 2, d / 2 + 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + d / 2, ay + d / 2, d / 2, 0, Math.PI * 2);
+      ctx.clip();
+      drawCover(ctx, face, x, ay, d, d);
+      ctx.restore();
+      x += d + 30;
+    } catch { /* no picture, then */ }
+  }
+  const leftMax = W - 48 - tallyW - 44 - x;
 
   ctx.textAlign = 'left';
   ctx.font = `700 62px ${DISPLAY}`;
   ctx.fillStyle = strong;
-  ctx.fillText(fitText(ctx, log.nickname, leftMax), 48, top + 86);
-  activityLine(48, top + 144, 40, leftMax, strong, soft);
+  ctx.fillText(fitText(ctx, log.nickname, leftMax), x, top + 86);
+  activityLine(x, top + 144, 40, leftMax, strong, soft);
   ctx.font = `500 28px ${BODY}`;
   ctx.fillStyle = quiet;
-  ctx.fillText(fitText(ctx, when, leftMax), 48, top + 194);
+  ctx.fillText(fitText(ctx, when, leftMax), x, top + 194);
 
   return toJpeg(canvas, 0.9);
 }

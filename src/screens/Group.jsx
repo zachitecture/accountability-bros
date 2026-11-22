@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { rpc } from '../api.js';
 import { fmtDate, fmtDuration, plural } from '../format.js';
-import { ErrorNote, Head, Icon, Loading, useLoad } from '../ui.jsx';
+import { Avatar, ErrorNote, Head, Icon, Loading, useLoad } from '../ui.jsx';
 import Feed from './Feed.jsx';
 
 const PERIODS = [['week', 'This week'], ['month', 'This month'], ['all', 'All time']];
@@ -32,6 +32,7 @@ function Leaderboard() {
             <a key={r.id} href={`#/member/${r.id}`} className={`card member${r.is_me ? ' selected' : ''}`}
               aria-label={`Number ${r.rank}, ${r.nickname}: ${fmtDuration(r.minutes)} over ${plural(r.sessions, 'session')}`}>
               <span className={`rank${r.rank === 1 && r.minutes > 0 ? ' first' : ''}`}>{r.rank}</span>
+              <Avatar path={r.avatar_path} name={r.nickname} size={36} />
               <span className="stack grow" style={{ gap: 3 }}>
                 <span className="row wrap" style={{ gap: 8 }}>
                   <span className="name" style={{ fontSize: 15 }}>{r.nickname}</span>
@@ -86,6 +87,7 @@ export default function Group({ state }) {
             const pct = m.total > 0 ? Math.min(100, Math.round((m.done / m.total) * 100)) : 0;
             return (
               <a key={m.id} href={`#/member/${m.id}`} className={`card member${m.is_me ? ' selected' : ''}`} aria-label={`${m.nickname}: ${m.done} of ${m.total} done, ${m.streak} week streak`}>
+                <Avatar path={m.avatar_path} name={m.nickname} size={40} />
                 <span className="stack grow" style={{ gap: 3 }}>
                   <span className="row wrap" style={{ gap: 8 }}>
                     <span className="name" style={{ fontSize: 15 }}>{m.nickname}</span>
@@ -95,6 +97,7 @@ export default function Group({ state }) {
                   </span>
                   {m.title ? <span className="tiny muted">{m.title}</span> : null}
                   {m.total === 0 && !m.on_leave ? <span className="tiny muted">Nothing declared</span> : null}
+                  {m.extras > 0 ? <span className="tiny gold">+{m.extras} extra</span> : null}
                 </span>
                 <span className="done-col">
                   <span>{m.done} / {m.total}</span>

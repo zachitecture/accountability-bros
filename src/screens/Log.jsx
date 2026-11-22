@@ -1,8 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { rpc, uploadProof } from '../api.js';
 import { compressPhoto, makeStamp } from '../image.js';
-import { fmtDate, fmtDayTime, fmtDuration } from '../format.js';
-import { ErrorNote, Head, Icon, Loading, Tick, useLoad } from '../ui.jsx';
+import { CATEGORY_LABEL, fmtDate, fmtDayTime, fmtDuration } from '../format.js';
+import { ErrorNote, Head, Icon, Loading, Tick, avatarBlob, useLoad } from '../ui.jsx';
+
+const EXTRA_QUICK = [
+  ['Walk', 'physical'], ['Run', 'physical'], ['Gym', 'physical'], ['Hike', 'physical'], ['Ride', 'physical'],
+  ['Swim', 'physical'], ['Sport', 'physical'], ['Stretching', 'recovery'],
+];
 
 function canShareFiles() {
   try {
@@ -25,6 +30,9 @@ export default function Log({ state }) {
   const [photo, setPhoto] = useState(null); // { blob, url }
   const [selfie, setSelfie] = useState(null); // { blob, url }, optional
   const [note, setNote] = useState('');
+  const [extraMode, setExtraMode] = useState(false); // logging something that is not one of this week's goals
+  const [extraName, setExtraName] = useState('');
+  const [extraCat, setExtraCat] = useState('physical');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null); // { log, blob, url, fileName }
@@ -37,11 +45,12 @@ export default function Log({ state }) {
   const done = goals.reduce((n, g) => n + g.done, 0);
   const total = goals.reduce((n, g) => n + g.target, 0);
   const open = goals.filter((g) => g.done < g.target);
-  const selected = open.find((g) => g.id === goalId) || open[0] || null;
+  const selected = extraMode ? null : (open.find((g) => g.id === goalId) || open[0] || null);
+  const category = extraMode ? extraCat : (selected ? selected.category : 'physical');
   const minMinutes = state.settings.min_physical_minutes;
   const entered = hours !== '' || minutes !== '';
   const mins = Number(hours || 0) * 60 + Number(minutes || 0);
-  const short = selected && selected.category === 'physical' && entered && mins <= minMinutes;
+  const short = !extraMode && category === 'physical' && entered && mins <= minMinutes;
 
   useEffect(() => () => { if (photo) URL.revokeObjectURL(photo.url); }, [photo]);
   useEffect(() => () => { if (selfie) URL.revokeObjectURL(selfie.url); }, [selfie]);
@@ -80,7 +89,8 @@ export default function Log({ state }) {
 
   async function stampIt() {
     setError('');
-    if (!selected) return;
+    if (!extraMode && !selected) return;
+    if (extraMode && !extraName.trim()) { setError('Say what you did.'); return; }
     if (!Number.isInteger(mins) || mins < 1) { setError('Enter how long it took.'); return; }
     if (mins > 1440) { setError('That is more than a day. Check the hours and minutes.'); return; }
     if (!photo) { setError('Add a proof photo first.'); return; }
@@ -88,10 +98,15 @@ export default function Log({ state }) {
       setBusy('Uploading photo…');
       const path = await uploadProof(state.me.id, photo.blob);
       setBusy('Logging…');
-      const log = await rpc('log_activity', { p_goal_id: selected.id, p_duration: mins, p_photo_path: path, p_note: note });
+      const log = extraMode
+        ? await rpc('log_extra', { p_activity: extraName.trim(), p_category: extraCat, p_duration: mins, p_photo_path: path, p_note: note })
+        : await rpc('log_activity', { p_goal_id: selected.id, p_duration: mins, p_photo_path: path, p_note: note });
       setBusy('Stamping…');
-      const blob = await makeStamp(photo.blob, log, selfie ? selfie.blob : null);
-      setResult({ log, blob, url: URL.createObjectURL(blob), fileName: `${slug(log.nickname)}-${slug(log.activity)}-${log.done}-of-${log.total}.jpg` });
+      const blob = await makeStamp(photo.blob, log, selfie ? selfie.blob : null, await avatarBlob(log.avatar_path));
+      const fileName = log.extra
+        ? `${slug(log.nickname)}-${slug(log.activity)}-extra.jpg`
+        : `${slug(log.nickname)}-${slug(log.activity)}-${log.done}-of-${log.total}.jpg`;
+      setResult({ log, blob, url: URL.createObjectURL(blob), fileName });
       window.scrollTo(0, 0);
     } catch (err) {
       setError(err.message);
@@ -125,6 +140,9 @@ export default function Log({ state }) {
     setPhoto(null);
     setSelfie(null);
     setNote('');
+    setExtraMode(false);
+    setExtraName('');
+    setExtraCat('physical');
     setHours('');
     setMinutes('');
     setGoalId(null);
@@ -151,12 +169,14 @@ export default function Log({ state }) {
     const left = log.total - log.done;
     return (
       <main className="screen">
-        <Head eyebrow={left === 0 ? 'Week complete' : `${left} to go this week`} title="Your stamp" side={<div className="big-num">{log.done} / {log.total}</div>} />
-        <img className="stamp-img" src={result.url} alt={`${log.nickname}, ${log.activity}, ${fmtDuration(log.duration_min)}, ${log.done} of ${log.total}`} />
+        <Head eyebrow={log.extra ? 'Extra activity' : left === 0 ? 'Week complete' : `${left} to go this week`} title="Your stamp" side={<div className="big-num">{log.done} / {log.total}</div>} />
+        <img className="stamp-img" src={result.url} alt={`${log.nickname}, ${log.activity}, ${fmtDuration(log.duration_min)}, ${log.extra ? 'extra' : `${log.done} of ${log.total}`}`} />
         <div className="stack">
           <Tick>Saved to your record</Tick>
           <Tick>Time set by the app: {fmtDayTime(log.logged_at, log.timezone)}</Tick>
-          {log.flag_short
+          {log.extra ? <Tick>An extra, so your weekly tally stays at {log.done} / {log.total}</Tick> : null}
+          {log.extra && log.category === 'physical' ? <Tick>{fmtDuration(log.duration_min)} added to the leaderboard</Tick> : null}
+          {log.extra ? null : log.flag_short
             ? <Tick warn>{fmtDuration(log.duration_min)} is not over the {log.min_physical_minutes} minute minimum, so it is flagged for the group</Tick>
             : log.category === 'physical' ? <Tick>{fmtDuration(log.duration_min)}, over the {log.min_physical_minutes} minute minimum</Tick> : null}
           {log.flag_same_day ? <Tick warn>Second {log.activity} logged today, so it is flagged for the group</Tick> : null}
@@ -186,7 +206,13 @@ export default function Log({ state }) {
   if (week.loading && !week.data) return <main className="screen">{head}<Loading /></main>;
   if (week.error) return <main className="screen">{head}<ErrorNote onRetry={week.reload}>{week.error}</ErrorNote></main>;
 
-  if (goals.length === 0) {
+  const extraButton = (cls = 'btn') => (
+    <button type="button" className={cls} onClick={() => setExtraMode(true)}>
+      <Icon name="plus" size={16} width={2.6} color={cls.includes('primary') ? 'var(--accent-ink)' : 'currentColor'} />Log something extra
+    </button>
+  );
+
+  if (goals.length === 0 && !extraMode) {
     return (
       <main className="screen">
         {head}
@@ -203,11 +229,12 @@ export default function Log({ state }) {
           </div>
         </div>
         <a className="btn primary" href="#/goals">{state.locked ? 'Set next week\'s goals' : 'Declare this week'}</a>
+        {extraButton()}
       </main>
     );
   }
 
-  if (open.length === 0) {
+  if (open.length === 0 && !extraMode) {
     return (
       <main className="screen">
         {head}
@@ -218,6 +245,8 @@ export default function Log({ state }) {
             <div className="sub">All {total} done for the week of {fmtDate(state.week_start, false)}.</div>
           </div>
         </div>
+        {extraButton('btn primary')}
+        <div className="small muted center">Extras count toward the leaderboard, not your tally.</div>
         <a className="btn" href="#/group">See the group</a>
       </main>
     );
@@ -233,7 +262,7 @@ export default function Log({ state }) {
           const isDone = g.done >= g.target;
           const isSel = selected && selected.id === g.id;
           return (
-            <button key={g.id} type="button" className={`card card-btn${isSel ? ' selected' : ''}`} aria-pressed={Boolean(isSel)} disabled={isDone} onClick={() => setGoalId(g.id)}>
+            <button key={g.id} type="button" className={`card card-btn${isSel ? ' selected' : ''}`} aria-pressed={Boolean(isSel)} disabled={isDone} onClick={() => { setGoalId(g.id); setExtraMode(false); }}>
               <span className="stack" style={{ gap: 3 }}>
                 <span className="name">{g.activity}</span>
                 <span className="sub">{isDone ? `All ${g.target} done` : `${g.done} of ${g.target} done`}</span>
@@ -242,7 +271,35 @@ export default function Log({ state }) {
             </button>
           );
         })}
+        <button type="button" className={`card card-btn${extraMode ? ' selected' : ''}`} aria-pressed={extraMode} onClick={() => setExtraMode(true)}>
+          <span className="stack" style={{ gap: 3 }}>
+            <span className="name">Something extra</span>
+            <span className="sub">Not one of your goals. Counts toward the leaderboard, not your tally.</span>
+          </span>
+          <Icon name={extraMode ? 'circleCheck' : 'plus'} size={24} color={extraMode ? 'var(--accent)' : 'var(--dim)'} />
+        </button>
       </div>
+
+      {extraMode ? (
+        <div className="stack">
+          <div className="field">
+            <label className="label" htmlFor="extra-name">What did you do?</label>
+            <input id="extra-name" className="input" maxLength={40} placeholder="e.g. Hike" value={extraName} onChange={(e) => setExtraName(e.target.value)} />
+          </div>
+          <div className="chips">
+            {EXTRA_QUICK.map(([a, c]) => (
+              <button key={a} type="button" className={`chip${extraName === a ? ' on' : ''}`} aria-pressed={extraName === a} onClick={() => { setExtraName(a); setExtraCat(c); }}>{a}</button>
+            ))}
+          </div>
+          <div className="field">
+            <label className="label" htmlFor="extra-type">Type</label>
+            <select id="extra-type" className="select" value={extraCat} onChange={(e) => setExtraCat(e.target.value)}>
+              {Object.entries(CATEGORY_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <div className="tiny muted">Only Physical extras count toward the leaderboard.</div>
+          </div>
+        </div>
+      ) : null}
 
       <fieldset className="stack plain">
         <legend className="label">How long?</legend>
@@ -264,7 +321,7 @@ export default function Log({ state }) {
           </div>
           {entered && mins > 0 ? <span className="soft time-total">{fmtDuration(mins)}</span> : null}
         </div>
-        {selected.category === 'physical' && entered ? (
+        {!extraMode && category === 'physical' && entered ? (
           short
             ? <div className="row small warn" style={{ gap: 8 }}><Icon name="flag" size={16} color="var(--warn)" />Not over the {minMinutes} minute minimum. It will be flagged.</div>
             : <div className="row small gold" style={{ gap: 8 }}><Icon name="check" size={16} color="var(--accent)" width={2.6} />Over the {minMinutes} minute minimum for Physical</div>

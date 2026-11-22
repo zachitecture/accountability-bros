@@ -127,6 +127,9 @@ a.link-btn { display: inline-flex; align-items: center; }
 .react .n { font-size: 14px; font-weight: 700; }
 .react[aria-pressed='true'] { border-color: var(--accent); background: var(--selected); }
 .react:disabled { opacity: 1; border-color: var(--line); }
+.avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 50%; overflow: hidden; background: var(--selected); color: var(--accent); font-family: var(--display); font-weight: 700; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.badge.extra { border: 1px solid var(--accent); color: var(--accent); }
 .note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .rank { width: 28px; flex-shrink: 0; font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--text-2); }
