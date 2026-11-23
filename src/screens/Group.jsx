@@ -32,11 +32,11 @@ function Leaderboard() {
             <a key={r.id} href={`#/member/${r.id}`} className={`card member${r.is_me ? ' selected' : ''}`}
               aria-label={`Number ${r.rank}, ${r.nickname}: ${fmtDuration(r.minutes)} over ${plural(r.sessions, 'session')}`}>
               <span className={`rank${r.rank === 1 && r.minutes > 0 ? ' first' : ''}`}>{r.rank}</span>
-              <Avatar path={r.avatar_path} name={r.nickname} size={36} rank={r.rank} />
+              <Avatar path={r.avatar_path} name={r.nickname} size={36} rank={r.tier} />
               <span className="stack grow" style={{ gap: 3 }}>
                 <span className="row wrap" style={{ gap: 8 }}>
                   <span className="name" style={{ fontSize: 15 }}>{r.nickname}</span>
-                  <RankIcon rank={r.rank} />
+                  <RankIcon rank={r.tier} />
                   {r.is_me ? <span className="badge you">You</span> : null}
                 </span>
                 <span className="tiny muted">{plural(r.sessions, 'session')}</span>

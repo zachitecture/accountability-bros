@@ -1,6 +1,7 @@
 // Draws the home-screen icons into public/. Run with: node tools/make-icons.mjs
 // Pass a logo name to switch, e.g.: node tools/make-icons.mjs barbell
 // Pass "sheet <file.png> [names...]" to draw options side by side for comparison.
+// Pass "chat <file.png> [name]" for a 1024px group photo: the logo shrunk to sit inside a circle crop.
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -126,7 +127,13 @@ const svg = (name, size, radius = 0) => `<svg xmlns="http://www.w3.org/2000/svg"
 const [mode = 'tally', outFile, ...pick] = process.argv.slice(2);
 const browser = await chromium.launch();
 
-if (mode === 'sheet') {
+if (mode === 'chat') {
+  const name = pick[0] || 'boldclean';
+  const page = await browser.newPage({ viewport: { width: 1024, height: 1024 }, deviceScaleFactor: 1 });
+  await page.setContent(`<body style="margin:0"><svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 512 512">
+    <rect width="512" height="512" fill="${NAVY}"/><g transform="translate(256 256) scale(0.78) translate(-256 -256)">${LOGOS[name]}</g></svg></body>`);
+  await page.screenshot({ path: outFile, clip: { x: 0, y: 0, width: 1024, height: 1024 } });
+} else if (mode === 'sheet') {
   const names = pick.length ? pick : Object.keys(LOGOS);
   const page = await browser.newPage({ viewport: { width: 80 + names.length * 300, height: 440 }, deviceScaleFactor: 2 });
   await page.setContent(`<body style="margin:0;background:#20242c;font-family:sans-serif;color:#fff">

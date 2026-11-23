@@ -645,7 +645,11 @@ await test('ranks: physical hours since the start date, each session counted up 
   // Rank shows across the app; the style only to its owner.
   assert.equal((await call(khov, 'get_group')).members.find((m) => m.nickname === 'Ranky').rank, 1);
   assert.equal((await call(khov, 'get_feed', { p_limit: 1 })).items[0].rank, 1);
-  assert.equal((await call(khov, 'get_leaderboard')).members.find((m) => m.nickname === 'Ranky').rank, 1);
+  // The leaderboard shows each member's rank (tier) separately from their place on the board.
+  const ranks = Object.fromEntries((await call(khov, 'get_group')).members.map((m) => [m.nickname, m.rank]));
+  const lb = (await call(khov, 'get_leaderboard', { p_period: 'all' })).members;
+  assert.deepEqual(lb.map((m) => [m.nickname, m.tier]), lb.map((m) => [m.nickname, ranks[m.nickname]]));
+  assert.ok(lb.some((m) => m.rank !== m.tier));
   const seen = await call(khov, 'get_member', { p_user: rk });
   assert.deepEqual([seen.rank, seen.style], [1, null]);
   await fails(call(khov, 'rank_state', { p_user: rk }), /permission denied/);

@@ -379,6 +379,9 @@ try {
   await page.getByRole('button', { name: 'Leaderboard' }).click();
   const khovRow = page.locator('a.member', { hasText: 'Khov' });
   await khovRow.getByText('5 h 23 min').waitFor(); // 61 + 90 + 52 minutes of goals, plus the 2-hour extra hike
+  // Icons show each member's rank, not their place: Khov is 1st and Silver; Gilly is Bronze.
+  assert.equal(await khovRow.locator('img.rank-icon').getAttribute('alt'), 'Silver');
+  assert.equal(await page.locator('a.member', { hasText: 'Gilly' }).locator('img.rank-icon').getAttribute('alt'), 'Bronze');
   await shot(page, 'leaderboard');
   await page.getByRole('button', { name: 'All time' }).click();
   await page.locator('a.member').first().waitFor();

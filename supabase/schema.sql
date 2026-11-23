@@ -1316,8 +1316,8 @@ begin
   v_from := v_month::timestamp at time zone m.timezone;
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', x.id, 'nickname', x.nickname, 'title', x.title, 'is_me', x.id = m.id, 'avatar_path', x.avatar_path,
-           'rank', (public.rank_state(x.id)->>'rank')::int,
-           'minutes', x.minutes, 'sessions', x.sessions, 'rank', x.rk)
+           'tier', (public.rank_state(x.id)->>'rank')::int, -- their rank (Iron to Champion)
+           'minutes', x.minutes, 'sessions', x.sessions, 'rank', x.rk) -- their place on the leaderboard
            order by x.rk, x.nickname), '[]'::jsonb)
     into v
   from (
