@@ -461,6 +461,11 @@ try {
   await page.getByLabel('Office (shown under the name)').fill('Leader of the Opposition');
   await page.getByRole('button', { name: 'Save Sauce' }).click();
   await page.getByText('Leader of the Opposition').waitFor();
+  // An admin can set another member's profile picture.
+  await page.getByRole('button', { name: /sauce@example\.com/ }).click();
+  await page.setInputFiles('input[aria-label="Choose a profile picture for Sauce"]', selfiePath);
+  await page.getByRole('button', { name: /sauce@example\.com/ }).locator('.avatar img').waitFor();
+  await page.getByRole('button', { name: /sauce@example\.com/ }).click();
   assert.equal(await page.getByLabel('New members can set goals for the week they join').isChecked(), true);
   ok('admin can edit a member');
 

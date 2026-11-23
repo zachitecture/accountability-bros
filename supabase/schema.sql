@@ -706,6 +706,28 @@ begin
   return public.get_state();
 end $$;
 
+-- The Executive can set (or remove) another member's profile picture. The photo is
+-- uploaded to the admin's own folder, since nobody can upload into someone else's.
+create or replace function public.set_member_avatar(p_user uuid, p_path text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  v_path text := nullif(btrim(coalesce(p_path, '')), '');
+begin
+  if not m.is_admin then raise exception 'Only the Executive can do that.'; end if;
+  if not exists (select 1 from public.profiles where id = p_user) then raise exception 'Member not found.'; end if;
+  if v_path is not null then
+    if v_path not like (m.id::text || '/%') and v_path not like (p_user::text || '/%') then
+      raise exception 'That photo is not one you uploaded.';
+    end if;
+    if not exists (select 1 from storage.objects where bucket_id = 'proof' and name = v_path) then
+      raise exception 'That photo did not upload. Try again.';
+    end if;
+  end if;
+  update public.profiles set avatar_path = v_path where id = p_user;
+  return public.list_members();
+end $$;
+
 -- A member can undo their own entry for 15 minutes (wrong goal, wrong photo).
 -- After that only the Executive can remove it, and never their own.
 create or replace function public.undo_log(p_log_id uuid) returns jsonb
@@ -1713,7 +1735,7 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', p.id, 'nickname', p.nickname, 'title', p.title, 'timezone', p.timezone, 'eligible', p.eligible,
            'is_admin', p.is_admin, 'can_manage_kitty', p.can_manage_kitty, 'active', p.active,
-           'is_ombudsman', p.is_ombudsman, 'is_attorney', p.is_attorney,
+           'is_ombudsman', p.is_ombudsman, 'is_attorney', p.is_attorney, 'avatar_path', p.avatar_path,
            'sort_order', p.sort_order, 'joined_at', p.joined_at, 'email', u.email, 'is_me', p.id = m.id)
            order by p.sort_order nulls last, p.joined_at), '[]'::jsonb)
     into v
@@ -1827,7 +1849,7 @@ declare
     'undo_log', 'get_group', 'get_member', 'get_kitty', 'issue_forfeit', 'excuse_week', 'add_entry', 'set_paid',
     'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member',
     'get_leave', 'request_leave', 'cancel_leave', 'decide_leave', 'get_leaderboard', 'get_feed', 'react_to_log',
-    'log_extra', 'set_avatar', 'get_rewards', 'set_style', 'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
+    'log_extra', 'set_avatar', 'set_member_avatar', 'get_rewards', 'set_style', 'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
     'second_dispute', 'add_findings', 'decide_dispute', 'withdraw_dispute'];
   internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until',
     'leave_days', 'on_leave', 'eligible_count', 'roll_goals', 'dispute_json', 'money_text', 'reactions_json',

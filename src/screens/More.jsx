@@ -4,6 +4,40 @@ import { squarePhoto } from '../image.js';
 import { fmtDate } from '../format.js';
 import { Avatar, ErrorNote, Head, Loading, useLoad } from '../ui.jsx';
 
+// An admin setting another member's profile picture.
+function MemberPicture({ m, meId, onSaved }) {
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  async function run(label, fn) {
+    setError('');
+    setBusy(label);
+    try { onSaved(await fn()); } catch (err) { setError(err.message); } finally { setBusy(''); }
+  }
+  function pick(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    run('Uploading…', async () => {
+      const path = await uploadProof(meId, await squarePhoto(file));
+      return rpc('set_member_avatar', { p_user: m.id, p_path: path });
+    });
+  }
+  return (
+    <div className="stack">
+      <div className="row" style={{ gap: 12 }}>
+        <Avatar path={m.avatar_path} name={m.nickname} size={56} />
+        <div className="actions">
+          <input ref={fileRef} className="sr" type="file" accept="image/*" onChange={pick} aria-label={`Choose a profile picture for ${m.nickname}`} tabIndex={-1} />
+          <button type="button" className="btn small-btn" disabled={Boolean(busy)} onClick={() => fileRef.current.click()}>{busy || (m.avatar_path ? 'Change picture' : 'Add a picture')}</button>
+          {m.avatar_path ? <button type="button" className="btn small-btn" disabled={Boolean(busy)} onClick={() => run('Removing…', () => rpc('set_member_avatar', { p_user: m.id, p_path: null }))}>Remove</button> : null}
+        </div>
+      </div>
+      <ErrorNote>{error}</ErrorNote>
+    </div>
+  );
+}
+
 // Profile picture: shown in the group, the feed and on your stamps.
 function ProfilePicture({ state, onState }) {
   const fileRef = useRef(null);
@@ -92,7 +126,7 @@ function Profile({ state, email, onState }) {
   );
 }
 
-function MemberEditor({ m, onSaved }) {
+function MemberEditor({ m, meId, onSaved, onPicture }) {
   const [f, setF] = useState({
     nickname: m.nickname, title: m.title, sort_order: m.sort_order ?? '', timezone: m.timezone,
     eligible: m.eligible, can_manage_kitty: m.can_manage_kitty, is_admin: m.is_admin, active: m.active,
@@ -118,6 +152,7 @@ function MemberEditor({ m, onSaved }) {
   const id = (k) => `${k}-${m.id}`;
   return (
     <form className="stack-lg" onSubmit={save} style={{ paddingTop: 12 }}>
+      <MemberPicture m={m} meId={meId} onSaved={onPicture} />
       <div className="field"><label className="label" htmlFor={id('nick')}>Name</label><input id={id('nick')} className="input" maxLength={20} value={f.nickname} onChange={set('nickname')} /></div>
       <div className="field"><label className="label" htmlFor={id('title')}>Office (shown under the name)</label><input id={id('title')} className="input" maxLength={30} placeholder="e.g. Treasurer" value={f.title} onChange={set('title')} /></div>
       <div className="field"><label className="label" htmlFor={id('order')}>Position in the group list</label><input id={id('order')} className="input" inputMode="numeric" placeholder="1 is the top" value={f.sort_order} onChange={(e) => setF({ ...f, sort_order: e.target.value.replace(/[^0-9]/g, '') })} /></div>
@@ -134,7 +169,7 @@ function MemberEditor({ m, onSaved }) {
   );
 }
 
-function Members({ refresh }) {
+function Members({ refresh, meId }) {
   const load = useLoad(() => rpc('list_members'), []);
   const [openId, setOpenId] = useState(null);
   if (load.loading && !load.data) return <Loading />;
@@ -146,14 +181,15 @@ function Members({ refresh }) {
         <div key={m.id} className="card">
           <button type="button" className="row between" style={{ width: '100%', border: 0, background: 'transparent', padding: 0, minHeight: 44, textAlign: 'left' }}
             aria-expanded={openId === m.id} onClick={() => setOpenId(openId === m.id ? null : m.id)}>
-            <span className="stack" style={{ gap: 3 }}>
+            <Avatar path={m.avatar_path} name={m.nickname} size={40} />
+            <span className="stack grow" style={{ gap: 3, marginLeft: 12 }}>
               <span className="name" style={{ fontSize: 15 }}>{m.nickname}{m.active ? '' : ' (paused)'}</span>
               <span className="tiny muted">{[m.title, m.is_admin ? 'Admin' : '', m.can_manage_kitty ? 'Kitty' : '', m.is_ombudsman ? 'Ombudsman' : '', m.is_attorney ? 'Attorney-General' : '', m.eligible ? '' : 'Not eligible'].filter(Boolean).join(' · ') || 'Member'}</span>
               <span className="tiny muted">{m.email}</span>
             </span>
             <span className="small gold">{openId === m.id ? 'Close' : 'Edit'}</span>
           </button>
-          {openId === m.id ? <MemberEditor m={m} onSaved={(list) => { load.setData(list); setOpenId(null); refresh(); }} /> : null}
+          {openId === m.id ? <MemberEditor m={m} meId={meId} onSaved={(list) => { load.setData(list); setOpenId(null); refresh(); }} onPicture={(list) => { load.setData(list); refresh(); }} /> : null}
         </div>
       ))}
     </div>
@@ -286,7 +322,7 @@ export default function More({ state, email, onState, refresh }) {
       {state.me.is_admin ? (
         <>
           <LeaveApprovals />
-          <Members refresh={refresh} />
+          <Members refresh={refresh} meId={state.me.id} />
           <Rules refresh={refresh} />
         </>
       ) : null}

@@ -483,6 +483,13 @@ await test('profile pictures: your own uploaded photo, shown to the group', asyn
   assert.equal(l.avatar_path, `${khov}/face.jpg`); // goes on the stamp
   await call(khov, 'undo_log', { p_log_id: l.id });
   assert.equal((await call(khov, 'set_avatar', { p_path: null })).me.avatar_path, null);
+  // The Executive can set someone else's picture, from a photo the admin uploaded.
+  await fails(call(rad, 'set_member_avatar', { p_user: gilly, p_path: `${rad}/face.jpg` }), /Only the Executive/);
+  await fails(call(khov, 'set_member_avatar', { p_user: gilly, p_path: `${rad}/face.jpg` }), /not one you uploaded/);
+  const list = await call(khov, 'set_member_avatar', { p_user: gilly, p_path: `${khov}/face.jpg` });
+  assert.equal(list.find((x) => x.nickname === 'Gilly').avatar_path, `${khov}/face.jpg`);
+  assert.equal((await call(gilly, 'get_state')).me.avatar_path, `${khov}/face.jpg`);
+  await call(khov, 'set_member_avatar', { p_user: gilly, p_path: null });
   await db.query(`delete from storage.objects where name = '${khov}/face.jpg'`);
 });
 
