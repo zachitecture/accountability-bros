@@ -68,10 +68,13 @@ admin changes in the More tab.
 
 ```
 npm install
-npm run dev          # needs .env.local with the two Supabase values
+npm run dev:local    # the app on your computer against a local stand-in database (no Supabase needed)
 npm run test:rules   # runs schema.sql in a local Postgres and checks every rule
 npm run test:app     # builds the app and drives it in a browser against a local stand-in for Supabase
 ```
+
+`npm run dev` on its own talks to whatever Supabase project `.env.local` points at. Don't point it at the
+live project: you would be logging test sessions into the real group. See `CLAUDE.md` before contributing.
 
 The tests never touch the real Supabase project. `tests/fake-supabase.mjs` is a small local server that
 runs the real `schema.sql` in an in-process Postgres (PGlite) and answers the same calls Supabase would.

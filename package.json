@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:rules": "node tests/rules.test.mjs",
-    "test:app": "node tests/app.test.mjs"
+    "test:app": "node tests/app.test.mjs",
+    "dev:local": "node tools/dev-local.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.1.0",
