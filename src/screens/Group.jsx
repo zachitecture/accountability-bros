@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { rpc } from '../api.js';
 import { fmtDate, fmtDuration, plural } from '../format.js';
-import { Avatar, ErrorNote, Head, Icon, Loading, useLoad } from '../ui.jsx';
+import { Avatar, ErrorNote, Head, Icon, Loading, RankIcon, useLoad } from '../ui.jsx';
 import Feed from './Feed.jsx';
 
 const PERIODS = [['week', 'This week'], ['month', 'This month'], ['all', 'All time']];
@@ -32,10 +32,11 @@ function Leaderboard() {
             <a key={r.id} href={`#/member/${r.id}`} className={`card member${r.is_me ? ' selected' : ''}`}
               aria-label={`Number ${r.rank}, ${r.nickname}: ${fmtDuration(r.minutes)} over ${plural(r.sessions, 'session')}`}>
               <span className={`rank${r.rank === 1 && r.minutes > 0 ? ' first' : ''}`}>{r.rank}</span>
-              <Avatar path={r.avatar_path} name={r.nickname} size={36} />
+              <Avatar path={r.avatar_path} name={r.nickname} size={36} rank={r.rank} />
               <span className="stack grow" style={{ gap: 3 }}>
                 <span className="row wrap" style={{ gap: 8 }}>
                   <span className="name" style={{ fontSize: 15 }}>{r.nickname}</span>
+                  <RankIcon rank={r.rank} />
                   {r.is_me ? <span className="badge you">You</span> : null}
                 </span>
                 <span className="tiny muted">{plural(r.sessions, 'session')}</span>
@@ -87,10 +88,11 @@ export default function Group({ state }) {
             const pct = m.total > 0 ? Math.min(100, Math.round((m.done / m.total) * 100)) : 0;
             return (
               <a key={m.id} href={`#/member/${m.id}`} className={`card member${m.is_me ? ' selected' : ''}`} aria-label={`${m.nickname}: ${m.done} of ${m.total} done, ${m.streak} week streak`}>
-                <Avatar path={m.avatar_path} name={m.nickname} size={40} />
+                <Avatar path={m.avatar_path} name={m.nickname} size={40} rank={m.rank} />
                 <span className="stack grow" style={{ gap: 3 }}>
                   <span className="row wrap" style={{ gap: 8 }}>
                     <span className="name" style={{ fontSize: 15 }}>{m.nickname}</span>
+                    <RankIcon rank={m.rank} />
                     {m.is_me ? <span className="badge you">You</span> : null}
                     {m.on_leave ? <span className="badge quiet">On leave</span> : null}
                     {m.flags > 0 ? <span className="badge flag">{m.flags} flagged</span> : null}

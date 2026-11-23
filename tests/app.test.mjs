@@ -95,6 +95,8 @@ async function seedWeek(uid, week, activity, declared, done, when) {
 
 async function seed(khov) {
   await fake.db.exec(`update public.profiles set title = 'Vice President', sort_order = 2, joined_at = '2026-10-01' where id = ${lit(khov)}`);
+  // Count rank hours from the start of the seeded history, so there is something to rank.
+  await fake.db.exec(`update public.settings set rewards_start = '2026-10-12'`);
   for (const [i, n] of [7, 7, 6, 7].entries()) await seedWeek(khov, WEEKS[i], 'Gym', n, n);
   for (const [nick, title, tz, joined, order, activity, past, cur] of OTHERS) {
     const uid = await fake.newUser(`${nick.toLowerCase()}@example.com`);
@@ -215,6 +217,18 @@ try {
   await shot(page, 'profile-picture');
   ok('profile picture: upload and show it');
 
+  // ---- rewards: 24 h 25 min so far is Bronze; Ocean is unlocked, Slate is not
+  await page.goto(`${APP}/#/rewards`);
+  await page.getByRole('heading', { name: 'Your rank' }).waitFor();
+  await page.getByText('35 min to Silver').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Slate bar, unlocks at Silver' }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Ocean bar', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('button[aria-label="Ocean bar"]')?.getAttribute('aria-pressed') === 'true');
+  await page.waitForFunction(() => document.querySelector('img.stamp-img'));
+  await page.waitForTimeout(400);
+  await shot(page, 'rewards-bronze');
+  ok('rewards: Bronze from past hours, Ocean chosen, Slate still locked');
+
   // ---- Tuesday 6:14 pm: goals are locked, log a gym session
   await fake.setNow(TUE_614PM);
   await page.goto(`${APP}/#/goals`);
@@ -247,6 +261,7 @@ try {
   await page.getByRole('heading', { name: 'Your stamp' }).waitFor();
   await page.getByText('3 / 7').waitFor();
   await page.getByText('Time set by the app: Tue 10 Nov, 6:14 pm').waitFor();
+  await page.getByText('You reached Silver!', { exact: false }).waitFor(); // 52 more minutes passes 25 h
   const size = await page.locator('img.stamp-img').evaluate(async (img) => { await img.decode(); return [img.naturalWidth, img.naturalHeight]; });
   assert.deepEqual(size, [1080, 1440]);
   const stampUrl = await page.locator('img.stamp-img').getAttribute('src');
@@ -333,6 +348,7 @@ try {
   assert.match(await page.locator('a.member', { hasText: 'Rad' }).innerText(), /1 \/ 4[\s\S]*0/);
   await shot(page, 'group');
   await mine.getByText('+1 extra').waitFor();
+  assert.equal(await mine.locator('img.rank-icon').getAttribute('alt'), 'Silver');
   assert.equal(await mine.locator('.avatar img').count(), 1);
   ok('group lists all 14 with tallies, streaks, extras and pictures');
 
@@ -354,6 +370,25 @@ try {
   assert.equal(await page.getByText('Bench 80 kg x 5').count(), 0); // notes never reach the feed
   await page.getByRole('button', { name: 'Tallies' }).click();
   ok('leaderboard and feed');
+
+  // Silver unlocks Slate and the corner marks.
+  await page.goto(`${APP}/#/rewards`);
+  await page.getByRole('button', { name: 'Slate bar', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('button[aria-label="Slate bar"]')?.getAttribute('aria-pressed') === 'true');
+  await page.getByRole('button', { name: 'Corner marks frame', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('button[aria-label="Corner marks frame"]')?.getAttribute('aria-pressed') === 'true');
+  assert.equal(await page.getByRole('button', { name: 'Keyline frame, unlocks at Platinum' }).isDisabled(), true);
+  await page.waitForTimeout(600);
+  const previewB64 = await page.evaluate(async () => {
+    const buf = await (await fetch(document.querySelector('img.stamp-img').src)).arrayBuffer();
+    let s = ''; new Uint8Array(buf).forEach((b) => { s += String.fromCharCode(b); });
+    return btoa(s);
+  });
+  writeFileSync(join(out, 'stamp-silver-preview.jpg'), Buffer.from(previewB64, 'base64'));
+  await shot(page, 'rewards-silver');
+  ok('rewards: Silver unlocks Slate and corner marks');
+  await page.goto(`${APP}/#/group`);
+  await page.getByRole('heading', { name: 'The group' }).waitFor();
 
   await mine.click();
   await page.getByRole('heading', { name: 'Khov' }).waitFor();

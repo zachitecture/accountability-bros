@@ -28,6 +28,12 @@ alter table public.settings add column if not exists leave_min_days int not null
 -- Clause 13: the handling fee for lodging a dispute, and how many days there are to lodge one.
 alter table public.settings add column if not exists dispute_fee numeric(10,2) not null default 15;
 alter table public.settings add column if not exists dispute_days int not null default 7;
+-- Ranks: hours count from this Monday. Seasons are this many weeks long; at the start of a
+-- new season a member keeps this share of their hours, up to this many hours.
+alter table public.settings add column if not exists rewards_start date not null default '2026-11-23';
+alter table public.settings add column if not exists season_weeks int not null default 13;
+alter table public.settings add column if not exists season_keep_pct int not null default 50;
+alter table public.settings add column if not exists season_keep_max int not null default 100;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
@@ -47,6 +53,10 @@ alter table public.profiles add column if not exists is_ombudsman boolean not nu
 alter table public.profiles add column if not exists is_attorney boolean not null default false;
 -- Profile picture, stored in the private photo store under the member's own folder.
 alter table public.profiles add column if not exists avatar_path text;
+-- Stamp style: bar colour, frame, and what shows beside the name ('rank', 'none' or a badge).
+alter table public.profiles add column if not exists stamp_bar text not null default 'forest';
+alter table public.profiles add column if not exists stamp_frame text not null default 'none';
+alter table public.profiles add column if not exists stamp_tag text not null default 'rank';
 
 create table if not exists public.goals (
   id uuid primary key default gen_random_uuid(),
@@ -574,6 +584,16 @@ end $$;
 
 -- --------------------------------------------------------------- logging ---
 
+-- Rank details sent back after logging: the stamp style, hours toward the next rank,
+-- and whether this session moved the member up a rank.
+create or replace function public.log_rank(p_user uuid, p_counted int) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare r jsonb := public.rank_state(p_user); v_total int := (r->>'total_min')::int;
+begin
+  return jsonb_build_object('style', public.stamp_style(p_user), 'rank_total_min', v_total,
+    'ranked_up', public.rank_index(v_total) > public.rank_index(v_total - p_counted));
+end $$;
+
 -- Record one completed activity. The time is the server's, the week is worked
 -- out from that time, and the entry cannot be edited afterwards.
 drop function if exists public.log_activity(uuid, int, text);
@@ -621,7 +641,8 @@ begin
     'flag_short', v_short, 'flag_same_day', v_same, 'extra', false, 'avatar_path', m.avatar_path,
     'activity', g.activity, 'category', g.category, 'nickname', m.nickname, 'timezone', m.timezone,
     'done', v_week_done, 'total', v_week_total, 'goal_done', v_done + 1, 'goal_target', g.target,
-    'group_name', s.group_name, 'min_physical_minutes', s.min_physical_minutes);
+    'group_name', s.group_name, 'min_physical_minutes', s.min_physical_minutes)
+    || public.log_rank(m.id, case when g.category = 'physical' then least(p_duration, 180) else 0 end);
 end $$;
 
 -- Record an extra session: something done this week that is not one of the member's
@@ -664,7 +685,8 @@ begin
     'flag_short', false, 'flag_same_day', false, 'extra', true, 'avatar_path', m.avatar_path,
     'activity', v_activity, 'category', v_category, 'nickname', m.nickname, 'timezone', m.timezone,
     'done', v_week_done, 'total', v_week_total,
-    'group_name', s.group_name, 'min_physical_minutes', s.min_physical_minutes);
+    'group_name', s.group_name, 'min_physical_minutes', s.min_physical_minutes)
+    || public.log_rank(m.id, case when v_category = 'physical' then least(p_duration, 180) else 0 end);
 end $$;
 
 -- Profile picture: a photo the member uploaded to their own folder, or null to remove it.
@@ -719,7 +741,7 @@ begin
     select p.sort_order as so, p.joined_at as ja,
       jsonb_build_object(
         'id', p.id, 'nickname', p.nickname, 'title', p.title, 'eligible', p.eligible, 'is_me', p.id = m.id,
-        'avatar_path', p.avatar_path, 'week_start', w.wk,
+        'avatar_path', p.avatar_path, 'week_start', w.wk, 'rank', (public.rank_state(p.id)->>'rank')::int,
         'total', (select coalesce(sum(g.target), 0) from public.goals g where g.user_id = p.id and g.week_start = w.wk),
         'done', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk and not l.extra),
         'extras', (select count(*) from public.logs l where l.user_id = p.id and l.week_start = w.wk and l.extra),
@@ -757,6 +779,9 @@ begin
     where l.user_id = v_user and l.week_start = v_week;
   return v_base || jsonb_build_object(
     'logs', v_logs,
+    'rank', (public.rank_state(v_user)->>'rank')::int,
+    'badges', (select coalesce(jsonb_agg(x), '[]'::jsonb) from jsonb_array_elements(public.badges_of(v_user)) x where (x->>'earned')::boolean),
+    'style', case when v_user = m.id then public.stamp_style(v_user) end,
     'streak', public.streak(v_user),
     'is_me', v_user = m.id,
     'excused', exists (select 1 from public.week_rulings r where r.user_id = v_user and r.week_start = v_week));
@@ -1058,7 +1083,7 @@ begin
   from (
     select l.logged_at, l.id, jsonb_build_object(
       'id', l.id, 'user_id', l.user_id, 'nickname', p.nickname, 'title', p.title, 'is_me', l.user_id = m.id,
-      'avatar_path', p.avatar_path, 'extra', l.extra,
+      'avatar_path', p.avatar_path, 'extra', l.extra, 'rank', (public.rank_state(l.user_id)->>'rank')::int,
       'activity', coalesce(g.activity, l.activity), 'category', coalesce(g.category, l.category), 'duration_min', l.duration_min,
       'logged_at', l.logged_at, 'photo_path', l.photo_path,
       'flag_short', l.flag_short, 'flag_same_day', l.flag_same_day,
@@ -1101,6 +1126,179 @@ begin
   return public.reactions_json(l.id, m.id);
 end $$;
 
+-- --------------------------------------------------------------- rewards ---
+
+-- Ranks by hours: Iron 0, Bronze 10, Silver 25, Gold 50, Platinum 80, Diamond 120, Champion 200.
+create or replace function public.rank_index(p_min int) returns int
+language sql immutable as $$
+  select case when p_min >= 12000 then 6 when p_min >= 7200 then 5 when p_min >= 4800 then 4
+              when p_min >= 3000 then 3 when p_min >= 1500 then 2 when p_min >= 600 then 1 else 0 end
+$$;
+
+-- What each bar colour and frame needs (the best rank a member has ever reached).
+create or replace function public.bar_unlock(p text) returns int
+language sql immutable as $$
+  select case p when 'forest' then 0 when 'ocean' then 1 when 'slate' then 2 when 'royal' then 3 when 'midnight' then 4 end
+$$;
+create or replace function public.frame_unlock(p text) returns int
+language sql immutable as $$
+  select case p when 'none' then 0 when 'corners' then 2 when 'keyline' then 4 when 'ice' then 5 when 'champion' then 6 end
+$$;
+
+-- Rank minutes: physical sessions (extras included), each counted up to 3 hours.
+create or replace function public.rank_minutes(p_user uuid, p_from date, p_to date) returns int
+language sql stable security definer set search_path = public as $$
+  select coalesce(sum(least(l.duration_min, 180)), 0)::int
+  from public.logs l left join public.goals g on g.id = l.goal_id
+  where l.user_id = p_user and coalesce(g.category, l.category) = 'physical'
+    and l.week_start >= p_from and l.week_start < p_to
+$$;
+
+-- A member's rank this season. Each new season starts with a share of the hours the member
+-- finished the last one with (soft reset). Unlocks follow the best rank ever reached.
+create or replace function public.rank_state(p_user uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  s public.settings; v_tz text; v_len int; v_cur date; v_season int; i int;
+  v_total int := 0; v_carry int := 0; v_earned int := 0; v_peak int := 0; v_from date;
+begin
+  select * into s from public.settings where id = 1;
+  select timezone into v_tz from public.profiles where id = p_user;
+  v_len := s.season_weeks * 7;
+  v_cur := public.week_of(coalesce(v_tz, 'Australia/Melbourne'));
+  v_season := greatest(0, floor((v_cur - s.rewards_start)::numeric / v_len))::int;
+  for i in 0..v_season loop
+    v_carry := case when i = 0 then 0 else least(s.season_keep_max * 60, v_total * s.season_keep_pct / 100) end;
+    v_from := s.rewards_start + i * v_len;
+    v_earned := public.rank_minutes(p_user, v_from, v_from + v_len);
+    v_total := v_carry + v_earned;
+    v_peak := greatest(v_peak, public.rank_index(v_total));
+  end loop;
+  return jsonb_build_object(
+    'season', v_season + 1, 'season_start', s.rewards_start + v_season * v_len,
+    'season_end', s.rewards_start + (v_season + 1) * v_len - 1,
+    'carried_min', v_carry, 'earned_min', v_earned, 'total_min', v_total,
+    'rank', public.rank_index(v_total), 'peak', v_peak);
+end $$;
+
+-- Badges: earned once, kept for good. Counted from the same start as hours.
+create or replace function public.badges_of(p_user uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  s public.settings; p public.profiles; v_cur date; w date;
+  v_max_sessions int; v_max_min int; v_extras int; v_now_sessions int; v_now_min int;
+  v_run int := 0; v_best int := 0; v_done int := 0; v_raised boolean := false; v_prev int; v_decl int;
+  b jsonb := '[]'::jsonb;
+begin
+  select * into s from public.settings where id = 1;
+  select * into p from public.profiles where id = p_user;
+  if p.id is null then return b; end if;
+  v_cur := public.week_of(p.timezone);
+  select coalesce(max(c), 0) into v_max_sessions from (
+    select count(*) c from public.logs where user_id = p_user and week_start >= s.rewards_start group by week_start) x;
+  select coalesce(max(m), 0) into v_max_min from (
+    select sum(least(l.duration_min, 180)) m from public.logs l left join public.goals g on g.id = l.goal_id
+    where l.user_id = p_user and l.week_start >= s.rewards_start and coalesce(g.category, l.category) = 'physical'
+    group by l.week_start) x;
+  select count(*) into v_extras from public.logs where user_id = p_user and extra and week_start >= s.rewards_start;
+  select count(*) into v_now_sessions from public.logs where user_id = p_user and week_start = v_cur;
+  v_now_min := public.rank_minutes(p_user, v_cur, v_cur + 7);
+  select coalesce(sum(target), 0) into v_prev from public.goals where user_id = p_user and week_start = s.rewards_start - 7;
+  w := s.rewards_start;
+  while w <= v_cur loop
+    select coalesce(sum(target), 0) into v_decl from public.goals where user_id = p_user and week_start = w;
+    if public.week_complete(p_user, w) then
+      v_done := v_done + 1; v_run := v_run + 1; v_best := greatest(v_best, v_run);
+      if v_prev > 0 and v_decl > v_prev then v_raised := true; end if;
+    elsif w = v_cur or public.on_leave(p_user, w)
+          or exists (select 1 from public.week_rulings r where r.user_id = p_user and r.week_start = w) then
+      null; -- still going, or excused: neither adds nor breaks
+    else
+      v_run := 0;
+    end if;
+    v_prev := v_decl;
+    w := w + 7;
+  end loop;
+  b := jsonb_build_array(
+    jsonb_build_object('key', 'five_week', 'label', '5 IN A WEEK', 'earned', v_max_sessions >= 5, 'progress', format('%s of 5 this week', least(v_now_sessions, 5))),
+    jsonb_build_object('key', 'seven_week', 'label', '7 IN A WEEK', 'earned', v_max_sessions >= 7, 'progress', format('%s of 7 this week', least(v_now_sessions, 7))),
+    jsonb_build_object('key', 'ten_week', 'label', '10 IN A WEEK', 'earned', v_max_sessions >= 10, 'progress', format('%s of 10 this week', least(v_now_sessions, 10))),
+    jsonb_build_object('key', 'big_week', 'label', 'BIG WEEK', 'earned', v_max_min >= 480, 'progress', format('%s of 8 h this week', least(v_now_min / 60, 8))),
+    jsonb_build_object('key', 'raised', 'label', 'RAISED THE BAR', 'earned', v_raised, 'progress', ''),
+    jsonb_build_object('key', 'extra_mile', 'label', 'EXTRA MILE', 'earned', v_extras >= 5, 'progress', format('%s of 5 extras', least(v_extras, 5))),
+    jsonb_build_object('key', 'streak4', 'label', '4-WEEK STREAK', 'earned', v_best >= 4, 'progress', format('%s of 4 in a row', least(v_run, 4))),
+    jsonb_build_object('key', 'streak8', 'label', '8-WEEK STREAK', 'earned', v_best >= 8, 'progress', format('%s of 8 in a row', least(v_run, 8))),
+    jsonb_build_object('key', 'streak12', 'label', '12-WEEK STREAK', 'earned', v_best >= 12, 'progress', format('%s of 12 in a row', least(v_run, 12))),
+    jsonb_build_object('key', 'done10', 'label', '10 WEEKS DONE', 'earned', v_done >= 10, 'progress', format('%s of 10 weeks', least(v_done, 10))),
+    jsonb_build_object('key', 'done25', 'label', '25 WEEKS DONE', 'earned', v_done >= 25, 'progress', format('%s of 25 weeks', least(v_done, 25))),
+    jsonb_build_object('key', 'done50', 'label', '50 WEEKS DONE', 'earned', v_done >= 50, 'progress', format('%s of 50 weeks', least(v_done, 50))));
+  return b;
+end $$;
+
+-- What a member's stamp looks like right now. A choice that is no longer allowed (a session
+-- removed after a dispute, say) falls back to the default.
+create or replace function public.stamp_style(p_user uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  p public.profiles; r jsonb; v_peak int; v_tag text; v_label text := '';
+begin
+  select * into p from public.profiles where id = p_user;
+  r := public.rank_state(p_user);
+  v_peak := (r->>'peak')::int;
+  v_tag := p.stamp_tag;
+  if v_tag not in ('rank', 'none') then
+    select x->>'label' into v_label from jsonb_array_elements(public.badges_of(p_user)) x
+      where x->>'key' = v_tag and (x->>'earned')::boolean;
+    if v_label is null then v_tag := 'rank'; v_label := ''; end if;
+  end if;
+  return jsonb_build_object(
+    'rank', (r->>'rank')::int,
+    'bar', case when coalesce(public.bar_unlock(p.stamp_bar), 99) <= v_peak then p.stamp_bar else 'forest' end,
+    'frame', case when coalesce(public.frame_unlock(p.stamp_frame), 99) <= v_peak then p.stamp_frame else 'none' end,
+    'tag', v_tag, 'tag_label', v_label);
+end $$;
+
+create or replace function public.get_rewards() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  s public.settings;
+begin
+  select * into s from public.settings where id = 1;
+  return public.rank_state(m.id) || jsonb_build_object(
+    'badges', public.badges_of(m.id),
+    'style', public.stamp_style(m.id),
+    'rewards_start', s.rewards_start, 'season_weeks', s.season_weeks,
+    'keep_pct', s.season_keep_pct, 'keep_max', s.season_keep_max);
+end $$;
+
+create or replace function public.set_style(p_bar text default null, p_frame text default null, p_tag text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  m public.profiles := public.me();
+  v_peak int := (public.rank_state(m.id)->>'peak')::int;
+  v_names text[] := array['Iron', 'Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond', 'Champion'];
+begin
+  if p_bar is not null then
+    if public.bar_unlock(p_bar) is null then raise exception 'Unknown bar colour.'; end if;
+    if public.bar_unlock(p_bar) > v_peak then raise exception 'That colour unlocks at %.', v_names[public.bar_unlock(p_bar) + 1]; end if;
+    update public.profiles set stamp_bar = p_bar where id = m.id;
+  end if;
+  if p_frame is not null then
+    if public.frame_unlock(p_frame) is null then raise exception 'Unknown frame.'; end if;
+    if public.frame_unlock(p_frame) > v_peak then raise exception 'That frame unlocks at %.', v_names[public.frame_unlock(p_frame) + 1]; end if;
+    update public.profiles set stamp_frame = p_frame where id = m.id;
+  end if;
+  if p_tag is not null then
+    if p_tag not in ('rank', 'none') and not exists (
+         select 1 from jsonb_array_elements(public.badges_of(m.id)) x where x->>'key' = p_tag and (x->>'earned')::boolean) then
+      raise exception 'You have not earned that badge yet.';
+    end if;
+    update public.profiles set stamp_tag = p_tag where id = m.id;
+  end if;
+  return public.get_rewards();
+end $$;
+
 -- ----------------------------------------------------------- leaderboard ---
 
 -- Most hours of physical activity: this week, this calendar month, or all time.
@@ -1118,6 +1316,7 @@ begin
   v_from := v_month::timestamp at time zone m.timezone;
   select coalesce(jsonb_agg(jsonb_build_object(
            'id', x.id, 'nickname', x.nickname, 'title', x.title, 'is_me', x.id = m.id, 'avatar_path', x.avatar_path,
+           'rank', (public.rank_state(x.id)->>'rank')::int,
            'minutes', x.minutes, 'sessions', x.sessions, 'rank', x.rk)
            order by x.rk, x.nickname), '[]'::jsonb)
     into v
@@ -1590,6 +1789,8 @@ begin
   if p_patch ? 'leave_min_days' then s.leave_min_days := (p_patch->>'leave_min_days')::int; end if;
   if p_patch ? 'dispute_fee' then s.dispute_fee := (p_patch->>'dispute_fee')::numeric; end if;
   if p_patch ? 'dispute_days' then s.dispute_days := (p_patch->>'dispute_days')::int; end if;
+  if p_patch ? 'season_keep_pct' then s.season_keep_pct := (p_patch->>'season_keep_pct')::int; end if;
+  if p_patch ? 'season_keep_max' then s.season_keep_max := (p_patch->>'season_keep_max')::int; end if;
   if p_patch ? 'first_week_grace' then s.first_week_grace := coalesce((p_patch->>'first_week_grace')::boolean, s.first_week_grace); end if;
   if p_patch ? 'join_code' then
     v_code := upper(btrim(coalesce(p_patch->>'join_code', '')));
@@ -1603,10 +1804,13 @@ begin
   if s.leave_min_days < 1 or s.leave_min_days > 7 then raise exception 'Leave days needed must be between 1 and 7.'; end if;
   if s.dispute_fee < 0 or s.dispute_fee > 1000 then raise exception 'The dispute fee must be between 0 and 1000.'; end if;
   if s.dispute_days < 1 or s.dispute_days > 90 then raise exception 'Days to lodge a dispute must be between 1 and 90.'; end if;
+  if s.season_keep_pct < 0 or s.season_keep_pct > 100 then raise exception 'The share of hours kept must be between 0 and 100.'; end if;
+  if s.season_keep_max < 0 or s.season_keep_max > 1000 then raise exception 'The most hours kept must be between 0 and 1000.'; end if;
   update public.settings set group_name = s.group_name, min_goals = s.min_goals,
     min_physical_minutes = s.min_physical_minutes, forfeit_per_member = s.forfeit_per_member,
     forfeit_due_days = s.forfeit_due_days, join_code = s.join_code, first_week_grace = s.first_week_grace,
-    leave_min_days = s.leave_min_days, dispute_fee = s.dispute_fee, dispute_days = s.dispute_days
+    leave_min_days = s.leave_min_days, dispute_fee = s.dispute_fee, dispute_days = s.dispute_days,
+    season_keep_pct = s.season_keep_pct, season_keep_max = s.season_keep_max
   where id = 1;
   return to_jsonb(s);
 end $$;
@@ -1623,10 +1827,11 @@ declare
     'undo_log', 'get_group', 'get_member', 'get_kitty', 'issue_forfeit', 'excuse_week', 'add_entry', 'set_paid',
     'delete_entry', 'list_members', 'update_member', 'get_admin_settings', 'update_settings', 'is_member',
     'get_leave', 'request_leave', 'cancel_leave', 'decide_leave', 'get_leaderboard', 'get_feed', 'react_to_log',
-    'log_extra', 'set_avatar', 'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
+    'log_extra', 'set_avatar', 'get_rewards', 'set_style', 'list_disputes', 'get_dispute', 'save_dispute', 'delete_dispute', 'ask_ombudsman', 'give_advice', 'lodge_dispute',
     'second_dispute', 'add_findings', 'decide_dispute', 'withdraw_dispute'];
   internal text[] := array['app_now', 'safe_tz', 'week_of', 'lock_at', 'me', 'week_complete', 'streak', 'edit_until',
-    'leave_days', 'on_leave', 'eligible_count', 'roll_goals', 'dispute_json', 'money_text', 'reactions_json'];
+    'leave_days', 'on_leave', 'eligible_count', 'roll_goals', 'dispute_json', 'money_text', 'reactions_json',
+    'rank_index', 'bar_unlock', 'frame_unlock', 'rank_minutes', 'rank_state', 'badges_of', 'stamp_style', 'log_rank'];
 begin
   for r in
     select p.oid::regprocedure as sig, p.proname

@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { proofUrl, rpc } from '../api.js';
 import { makeStamp } from '../image.js';
 import { addDays, fmtDate, fmtDayTime, fmtDuration, plural } from '../format.js';
-import { Avatar, ErrorNote, Head, Icon, Loading, ProofThumb, avatarBlob, useLoad } from '../ui.jsx';
+import { Avatar, ErrorNote, Head, Icon, Loading, ProofThumb, RankIcon, avatarBlob, useLoad } from '../ui.jsx';
+import { TIERS } from '../rank.js';
 
 function canShareFiles() {
   try {
@@ -44,7 +45,7 @@ export default function Member({ state, userId }) {
     try {
       const photo = await (await fetch(await proofUrl(log.photo_path))).blob();
       const info = {
-        ...log, nickname: d.nickname, timezone: d.timezone,
+        ...log, nickname: d.nickname, timezone: d.timezone, style: d.style,
         // The tally as it stood after this session (extras never count toward it).
         done: d.logs.slice(0, index + 1).filter((x) => !x.extra).length,
         total: d.goals.reduce((n, g) => n + g.target, 0),
@@ -97,15 +98,22 @@ export default function Member({ state, userId }) {
       {d ? (
         <>
           <div className="row" style={{ gap: 14, alignItems: 'center' }}>
-            <Avatar path={d.avatar_path} name={d.nickname} size={64} />
+            <Avatar path={d.avatar_path} name={d.nickname} size={64} rank={d.rank} />
             <div className="grow">
               <Head
-                eyebrow={d.title || 'Member'}
+                eyebrow={<>{d.title ? `${d.title} · ` : ''}<RankIcon rank={d.rank} size={14} /> {(TIERS[d.rank] || TIERS[0]).name}</>}
                 title={d.nickname}
                 side={<><div className="big-num">{d.streak}</div><div className="tiny muted">week streak</div></>}
               />
             </div>
           </div>
+
+          {d.badges && d.badges.length ? (
+            <div className="row wrap" style={{ gap: 6 }} aria-label="Badges">
+              {d.badges.map((b) => <span key={b.key} className="badge gold-badge">{b.label}</span>)}
+            </div>
+          ) : null}
+          {d.is_me ? <a className="link-btn" style={{ alignSelf: 'flex-start' }} href="#/rewards">Your rank, badges and stamp style</a> : null}
 
           <div className="row between">
             <button type="button" className="icon-btn" aria-label="Previous week" onClick={() => setWeek(addDays(d.week_start, -7))}><Icon name="back" size={18} width={2.4} /></button>

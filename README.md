@@ -27,6 +27,13 @@ The Ombudsman inquires and the Executive decides; nobody decides a dispute they 
 Extras: sessions that are not one of your goals. They never change the weekly tally; physical ones
 count toward the leaderboard. The stamp says EXTRA where the tally goes.
 
+Ranks: hours of physical sessions (extras included, each session counted up to 3 h) since Mon 23 Nov 2026
+climb Iron, Bronze 10 h, Silver 25 h, Gold 50 h, Platinum 80 h, Diamond 120 h, Champion 200 h. Each rank
+colours the picture ring, tally and rank badge, and unlocks a bar colour or frame for the stamp (More >
+Rank, badges and stamp style). Seasons last 13 weeks; a new season keeps 50% of your hours, up to 100 h
+(both adjustable in the rules), and unlocks stay. Badges (weekly sessions, big week, raised the bar,
+extras, streaks, completed weeks) are kept for good.
+
 Not in yet: the Terms of Reference page, notifications, watch data.
 
 ## The rules the database enforces

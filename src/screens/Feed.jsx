@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { proofUrl, rpc } from '../api.js';
 import { fmtDayTime, fmtDuration } from '../format.js';
-import { Avatar, ErrorNote, Icon, Loading } from '../ui.jsx';
+import { Avatar, ErrorNote, Icon, Loading, RankIcon } from '../ui.jsx';
 
 const REACTIONS = [['love', '💙', 'Love'], ['hmm', '🤨', 'Questionable']];
 
@@ -59,10 +59,11 @@ function Item({ item, state, onReactions }) {
     <article className="card stack feed-item">
       <div className="row between" style={{ alignItems: 'flex-start' }}>
         <a href={`#/member/${item.user_id}`} className="row" style={{ gap: 10, textDecoration: 'none', color: 'var(--text)' }}>
-          <Avatar path={item.avatar_path} name={item.nickname} size={40} />
+          <Avatar path={item.avatar_path} name={item.nickname} size={40} rank={item.rank} />
           <span className="stack" style={{ gap: 3 }}>
             <span className="row wrap" style={{ gap: 8 }}>
               <span className="name" style={{ fontSize: 15 }}>{item.nickname}</span>
+              <RankIcon rank={item.rank} />
               {item.is_me ? <span className="badge you">You</span> : null}
             </span>
             <span className="sub">{fmtDayTime(item.logged_at, state.me.timezone)}</span>

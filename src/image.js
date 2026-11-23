@@ -1,5 +1,6 @@
 // Photo handling: shrink what the camera gives us, and draw the stamped image.
 import { fmtDuration, fmtStamp } from './format.js';
+import { TIERS, barOf, drawEmblem } from './rank.js';
 
 // The stamp's colours are the --stamp-* values in styles.css, so the whole
 // palette lives in one place.
@@ -98,10 +99,14 @@ function hexA(hex, alpha) {
 // An optional selfie is inset over the top-left of the photo, and the member's profile
 // picture (if they have one) sits in a circle beside their name. An extra session shows
 // EXTRA where the tally goes, because it does not count toward the week.
+// log.style (from the server) carries the member's rank and chosen bar, frame and name tag.
 export async function makeStamp(photoBlob, log, selfieBlob = null, avatarBlob = null) {
   const W = 1080;
   const H = 1440;
   const c = stampColours();
+  const st = log.style || null;
+  const tier = st ? (TIERS[st.rank] || TIERS[0]) : null;
+  const bar = st ? barOf(st.bar) : { color: c.BAND, alpha: 0.6 };
   const DISPLAY = '"Space Grotesk", "Inter", system-ui, sans-serif';
   const BODY = '"Inter", system-ui, sans-serif';
   try {
@@ -123,7 +128,7 @@ export async function makeStamp(photoBlob, log, selfieBlob = null, avatarBlob = 
 
   // Group name: the quietest thing on the image.
   if ('letterSpacing' in ctx) ctx.letterSpacing = '2px';
-  pill(ctx, String(log.group_name || 'Accountability Bros').toUpperCase(), 36, 36, { bg: hexA(c.BAND, 0.55), fg: '#FFFFFF', font: `700 20px ${BODY}`, padX: 14, height: 40 });
+  pill(ctx, String(log.group_name || 'Accountability Bros').toUpperCase(), 36, 36, { bg: hexA(bar.color, 0.55), fg: '#FFFFFF', font: `700 20px ${BODY}`, padX: 14, height: 40 });
   if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
   if (selfieBlob) {
@@ -181,11 +186,27 @@ export async function makeStamp(photoBlob, log, selfieBlob = null, avatarBlob = 
   const strong = '#FFFFFF';
   const soft = 'rgba(255, 255, 255, 0.88)';
   const quiet = 'rgba(255, 255, 255, 0.74)';
-  ctx.fillStyle = hexA(c.BAND, 0.6);
+  ctx.fillStyle = hexA(bar.color, bar.alpha);
   ctx.fillRect(0, top, W, BAR);
+  // Gold and above: a line in the rank's colours along the top of the bar.
+  if (st && st.rank >= 3) {
+    const lg = ctx.createLinearGradient(0, 0, W, 0);
+    lg.addColorStop(0, tier.hi);
+    lg.addColorStop(1, tier.lo);
+    ctx.fillStyle = lg;
+    ctx.fillRect(0, top, W, 6);
+  }
 
+  // The tally is drawn in the rank's colour (white at Iron).
   ctx.textAlign = 'right';
-  ctx.fillStyle = c.POP;
+  if (tier && tier.tally === 'grad') {
+    const tg = ctx.createLinearGradient(0, H - 190, 0, H - 54);
+    tg.addColorStop(0, '#FFE38C');
+    tg.addColorStop(1, '#F08A3C');
+    ctx.fillStyle = tg;
+  } else {
+    ctx.fillStyle = tier ? tier.tally : c.POP;
+  }
   let tallyW;
   if (log.extra) {
     ctx.font = `700 92px ${DISPLAY}`;
@@ -204,8 +225,15 @@ export async function makeStamp(photoBlob, log, selfieBlob = null, avatarBlob = 
       const d = 148; const ay = top + (BAR - d) / 2;
       ctx.save();
       ctx.beginPath();
-      ctx.arc(x + d / 2, ay + d / 2, d / 2 + 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#FFFFFF';
+      ctx.arc(x + d / 2, ay + d / 2, d / 2 + (st && st.rank > 0 ? 7 : 4), 0, Math.PI * 2);
+      if (st && st.rank > 0) {
+        const rg = ctx.createLinearGradient(0, ay, 0, ay + d);
+        rg.addColorStop(0, tier.hi);
+        rg.addColorStop(1, tier.lo);
+        ctx.fillStyle = rg;
+      } else {
+        ctx.fillStyle = '#FFFFFF';
+      }
       ctx.fill();
       ctx.beginPath();
       ctx.arc(x + d / 2, ay + d / 2, d / 2, 0, Math.PI * 2);
@@ -220,11 +248,74 @@ export async function makeStamp(photoBlob, log, selfieBlob = null, avatarBlob = 
   ctx.textAlign = 'left';
   ctx.font = `700 62px ${DISPLAY}`;
   ctx.fillStyle = strong;
-  ctx.fillText(fitText(ctx, log.nickname, leftMax), x, top + 86);
+  const name = fitText(ctx, log.nickname, leftMax);
+  ctx.fillText(name, x, top + 86);
+  const nameW = ctx.measureText(name).width;
+
+  // Beside the name: the rank badge, a chosen badge, or nothing. Left off if there is no room.
+  if (st && st.tag !== 'none') {
+    const isRank = st.tag === 'rank';
+    const label = isRank ? tier.name.toUpperCase() : String(st.tag_label || '').toUpperCase();
+    ctx.font = `700 24px ${BODY}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '1.5px';
+    const pw = ctx.measureText(label).width + (isRank ? 74 : 36);
+    const px = x + nameW + 18;
+    if (label && px + pw <= x + leftMax) {
+      const py = top + 40;
+      const ph = 52;
+      roundedPath(ctx, px, py, pw, ph, 26);
+      ctx.fillStyle = isRank ? 'rgba(0, 0, 0, 0.38)' : '#E2C26E';
+      ctx.fill();
+      if (isRank) drawEmblem(ctx, st.rank, px + 28, py + ph / 2, 40);
+      ctx.fillStyle = isRank ? (tier.tally === 'grad' ? '#FFD27A' : tier.hi) : '#18211B';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, px + (isRank ? 54 : 18), py + ph / 2 + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  }
+
   activityLine(x, top + 144, 40, leftMax, strong, soft);
   ctx.font = `500 28px ${BODY}`;
   ctx.fillStyle = quiet;
   ctx.fillText(fitText(ctx, when, leftMax), x, top + 194);
+
+  // Frames, drawn last so they sit over everything.
+  const frame = st ? st.frame : 'none';
+  if (frame === 'corners') {
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    const m = 30; const L = 110; const b = top - 30;
+    for (const [px, py, sx, sy] of [[m, m + 64, 1, 1], [W - m, m, -1, 1], [m, b, 1, -1], [W - m, b, -1, -1]]) {
+      ctx.beginPath(); ctx.moveTo(px, py + sy * L); ctx.lineTo(px, py); ctx.lineTo(px + sx * L, py); ctx.stroke();
+    }
+  } else if (frame === 'keyline') {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = 5;
+    roundedPath(ctx, 22, 22, W - 44, H - 44, 28);
+    ctx.stroke();
+  } else if (frame === 'ice') {
+    const ig = ctx.createLinearGradient(0, 0, W, H);
+    ig.addColorStop(0, '#EAF3FF'); ig.addColorStop(0.5, '#7FA9F2'); ig.addColorStop(1, '#EAF3FF');
+    ctx.strokeStyle = ig;
+    ctx.lineWidth = 12;
+    roundedPath(ctx, 6, 6, W - 12, H - 12, 30);
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(220, 235, 255, 0.8)';
+    roundedPath(ctx, 28, 28, W - 56, H - 56, 22);
+    ctx.stroke();
+  } else if (frame === 'champion') {
+    const cg = ctx.createLinearGradient(0, 0, W, H);
+    cg.addColorStop(0, '#FFE38C'); cg.addColorStop(0.5, '#F08A3C'); cg.addColorStop(1, '#FFE38C');
+    ctx.strokeStyle = cg;
+    ctx.lineWidth = 16;
+    ctx.strokeRect(8, 8, W - 16, H - 16);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255, 214, 130, 0.85)';
+    ctx.strokeRect(32, 32, W - 64, H - 64);
+  }
 
   return toJpeg(canvas, 0.9);
 }

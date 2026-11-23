@@ -180,6 +180,7 @@ function Rules({ refresh }) {
         forfeit_per_member: Number(f.forfeit_per_member), forfeit_due_days: Number(f.forfeit_due_days), join_code: f.join_code,
         first_week_grace: Boolean(f.first_week_grace), leave_min_days: Number(f.leave_min_days),
         dispute_fee: Number(f.dispute_fee), dispute_days: Number(f.dispute_days),
+        season_keep_pct: Number(f.season_keep_pct), season_keep_max: Number(f.season_keep_max),
       } });
       load.setData(s);
       setSaved(true);
@@ -202,6 +203,8 @@ function Rules({ refresh }) {
       <div className="field"><label className="label" htmlFor="r-days">Days to pay</label><input id="r-days" className="input" inputMode="numeric" value={f.forfeit_due_days} onChange={set('forfeit_due_days')} /></div>
       <div className="field"><label className="label" htmlFor="r-leave">Days of leave needed for a week to count as a leave week (1 to 7)</label><input id="r-leave" className="input" inputMode="numeric" value={f.leave_min_days ?? ''} onChange={set('leave_min_days')} /></div>
       <div className="field"><label className="label" htmlFor="r-dfee">Dispute handling fee ($)</label><input id="r-dfee" className="input" inputMode="decimal" value={f.dispute_fee ?? ''} onChange={set('dispute_fee')} /></div>
+      <div className="field"><label className="label" htmlFor="r-keep">Share of hours kept into a new season (%)</label><input id="r-keep" className="input" inputMode="numeric" value={f.season_keep_pct ?? ''} onChange={set('season_keep_pct')} /></div>
+      <div className="field"><label className="label" htmlFor="r-keepmax">Most hours kept into a new season</label><input id="r-keepmax" className="input" inputMode="numeric" value={f.season_keep_max ?? ''} onChange={set('season_keep_max')} /></div>
       <div className="field"><label className="label" htmlFor="r-ddays">Days to lodge a dispute</label><input id="r-ddays" className="input" inputMode="numeric" value={f.dispute_days ?? ''} onChange={set('dispute_days')} /></div>
       <label className="check">
         <input type="checkbox" checked={Boolean(f.first_week_grace)} onChange={(e) => { setF({ ...f, first_week_grace: e.target.checked }); setSaved(false); }} />
@@ -276,6 +279,7 @@ export default function More({ state, email, onState, refresh }) {
   return (
     <main className="screen">
       <Head eyebrow={state.settings.group_name} title="More" />
+      <a className="btn primary" href="#/rewards">Rank, badges and stamp style</a>
       <Profile state={state} email={email} onState={onState} />
       <a className="btn" href="#/leave">Sick, injured or away? Take leave</a>
       <a className="btn" href="#/disputes">Disputes</a>

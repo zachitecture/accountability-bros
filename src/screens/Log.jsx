@@ -3,6 +3,7 @@ import { rpc, uploadProof } from '../api.js';
 import { compressPhoto, makeStamp } from '../image.js';
 import { CATEGORY_LABEL, fmtDate, fmtDayTime, fmtDuration } from '../format.js';
 import { ErrorNote, Head, Icon, Loading, Tick, avatarBlob, useLoad } from '../ui.jsx';
+import { TIERS } from '../rank.js';
 
 const EXTRA_QUICK = [
   ['Walk', 'physical'], ['Run', 'physical'], ['Gym', 'physical'], ['Hike', 'physical'], ['Ride', 'physical'],
@@ -175,6 +176,9 @@ export default function Log({ state }) {
           <Tick>Saved to your record</Tick>
           <Tick>Time set by the app: {fmtDayTime(log.logged_at, log.timezone)}</Tick>
           {log.extra ? <Tick>An extra, so your weekly tally stays at {log.done} / {log.total}</Tick> : null}
+          {log.ranked_up && log.style ? <Tick>You reached {TIERS[log.style.rank].name}! See what it unlocks under More, Rewards.</Tick> : null}
+          {!log.ranked_up && log.style && log.category === 'physical' && log.style.rank < TIERS.length - 1
+            ? <Tick>{fmtDuration(TIERS[log.style.rank + 1].hours * 60 - log.rank_total_min)} to {TIERS[log.style.rank + 1].name}</Tick> : null}
           {log.extra && log.category === 'physical' ? <Tick>{fmtDuration(log.duration_min)} added to the leaderboard</Tick> : null}
           {log.extra ? null : log.flag_short
             ? <Tick warn>{fmtDuration(log.duration_min)} is not over the {log.min_physical_minutes} minute minimum, so it is flagged for the group</Tick>

@@ -618,4 +618,96 @@ await test('schema.sql can be run a second time without harm', async () => {
   await fails(call(khov, 'streak', { p_user: khov }), /permission denied/);
 });
 
+// ---- ranks, badges and seasons. Hours count from Mon 23 Nov 2026.
+let rk;
+const rkExtra = (name, cat, min) => call(rk, 'log_extra', { p_activity: name, p_category: cat, p_duration: min, p_photo_path: `${rk}/${name}-${Math.random()}.jpg` });
+const bulk = (uid, week, n, min) => db.query(`insert into public.logs (user_id, extra, activity, category, week_start, local_day, duration_min, photo_path, logged_at)
+  select '${uid}', true, 'Bulk', 'physical', '${week}', '${week}', ${min}, '${uid}/bulk-${week}-' || i || '.jpg', '${week}T01:00:00Z' from generate_series(1, ${n}) i`);
+
+await test('ranks: physical hours since the start date, each session counted up to 3 hours', async () => {
+  await setNow('2026-12-29T00:00:00Z'); // Tue 29 Dec, 11 am in Melbourne
+  rk = await newUser('ranky@example.com');
+  await call(rk, 'join_group', { p_code: 'NEWCODE1', p_nickname: 'Ranky', p_timezone: 'Australia/Melbourne' });
+  let x = await call(rk, 'get_rewards');
+  assert.deepEqual([x.season, x.season_start, x.season_end, x.rank, x.total_min], [1, '2026-11-23', '2027-02-21', 0, 0]);
+  assert.deepEqual(x.style, { rank: 0, bar: 'forest', frame: 'none', tag: 'rank', tag_label: '' });
+  let l = await rkExtra('Hike', 'physical', 300);
+  assert.deepEqual([l.rank_total_min, l.ranked_up], [180, false]); // 5 hours counts as 3
+  await rkExtra('Reading', 'lifestyle', 120); // not physical, so not counted
+  for (let i = 0; i < 3; i += 1) await rkExtra(`Run${i}`, 'physical', 120);
+  l = await rkExtra('Swim', 'physical', 60);
+  assert.deepEqual([l.rank_total_min, l.ranked_up, l.style.rank], [600, true, 1]); // 10 hours: Bronze
+  // Sessions before the start date never count.
+  await db.query(`insert into public.logs (user_id, extra, activity, category, week_start, local_day, duration_min, photo_path, logged_at)
+    values ('${rk}', true, 'Old', 'physical', '2026-11-16', '2026-11-16', 600, '${rk}/old.jpg', '2026-11-16T01:00:00Z')`);
+  x = await call(rk, 'get_rewards');
+  assert.deepEqual([x.total_min, x.rank, x.peak], [600, 1, 1]);
+  // Rank shows across the app; the style only to its owner.
+  assert.equal((await call(khov, 'get_group')).members.find((m) => m.nickname === 'Ranky').rank, 1);
+  assert.equal((await call(khov, 'get_feed', { p_limit: 1 })).items[0].rank, 1);
+  assert.equal((await call(khov, 'get_leaderboard')).members.find((m) => m.nickname === 'Ranky').rank, 1);
+  const seen = await call(khov, 'get_member', { p_user: rk });
+  assert.deepEqual([seen.rank, seen.style], [1, null]);
+  await fails(call(khov, 'rank_state', { p_user: rk }), /permission denied/);
+});
+
+await test('badges: sessions and hours in a week, extras, raised the bar, streaks', async () => {
+  let b = Object.fromEntries((await call(rk, 'get_rewards')).badges.map((x) => [x.key, x]));
+  assert.equal(b.five_week.earned, true); // 6 sessions this week, any type
+  assert.deepEqual([b.seven_week.earned, b.seven_week.progress], [false, '6 of 7 this week']);
+  assert.equal(b.big_week.earned, true); // 10 counted hours this week
+  assert.equal(b.extra_mile.earned, true); // 6 extras
+  assert.equal(b.raised.earned, false);
+  // Joined mid-week: 3 goals, all done.
+  let w = await call(rk, 'save_goals', { p_week: '2026-12-28', p_goals: [{ activity: 'Gym', category: 'physical', target: 3 }] });
+  for (let i = 0; i < 3; i += 1) await call(rk, 'log_activity', { p_goal_id: w.goals[0].id, p_duration: 45, p_photo_path: `${rk}/g1-${i}.jpg` });
+  // Next week: raise it to 4 before the lock, and finish all 4.
+  await setNow('2027-01-03T23:00:00Z'); // Mon 4 Jan, 10 am
+  w = await call(rk, 'get_week');
+  assert.equal(w.carried, true);
+  w = await call(rk, 'save_goals', { p_week: '2027-01-04', p_goals: [{ id: w.goals[0].id, activity: 'Gym', category: 'physical', target: 4 }] });
+  for (let i = 0; i < 4; i += 1) await call(rk, 'log_activity', { p_goal_id: w.goals[0].id, p_duration: 45, p_photo_path: `${rk}/g2-${i}.jpg` });
+  b = Object.fromEntries((await call(rk, 'get_rewards')).badges.map((x) => [x.key, x]));
+  assert.equal(b.raised.earned, true);
+  assert.deepEqual([b.streak4.earned, b.streak4.progress], [false, '2 of 4 in a row']);
+  assert.equal(b.done10.progress, '2 of 10 weeks');
+  assert.deepEqual((await call(khov, 'get_member', { p_user: rk })).badges.map((x) => x.key).sort(),
+    ['big_week', 'extra_mile', 'five_week', 'raised', 'seven_week']); // 9 sessions in the week of 28 Dec
+});
+
+await test('stamp style: only what your best rank has unlocked', async () => {
+  await fails(call(rk, 'set_style', { p_bar: 'slate' }), /unlocks at Silver/);
+  await fails(call(rk, 'set_style', { p_frame: 'corners' }), /unlocks at Silver/);
+  await fails(call(rk, 'set_style', { p_bar: 'pink' }), /Unknown bar colour/);
+  await fails(call(rk, 'set_style', { p_tag: 'ten_week' }), /not earned/);
+  const x = await call(rk, 'set_style', { p_bar: 'ocean', p_tag: 'five_week' });
+  assert.deepEqual(x.style, { rank: 1, bar: 'ocean', frame: 'none', tag: 'five_week', tag_label: '5 IN A WEEK' });
+  const l = await rkExtra('Walk', 'physical', 30);
+  assert.deepEqual([l.style.bar, l.style.tag_label], ['ocean', '5 IN A WEEK']);
+  assert.equal((await call(rk, 'get_member', { p_user: rk })).style.bar, 'ocean'); // for sharing an old stamp again
+});
+
+await test('seasons: a new season keeps half your hours, up to 100; unlocks stay', async () => {
+  await bulk(rk, '2027-01-11', 15, 200); // 15 more sessions, 3 hours each counted
+  const s1 = await call(rk, 'get_rewards');
+  assert.equal(s1.rank, 3); // Gold
+  await call(rk, 'set_style', { p_bar: 'royal', p_frame: 'corners' });
+  await setNow('2027-02-21T23:00:00Z'); // Mon 22 Feb: season 2
+  const s2 = await call(rk, 'get_rewards');
+  assert.deepEqual([s2.season, s2.season_start, s2.carried_min, s2.earned_min], [2, '2027-02-22', Math.floor(s1.total_min / 2), 0]);
+  assert.deepEqual([s2.rank, s2.peak], [2, 3]); // back to Silver, but Gold's unlocks stay
+  assert.deepEqual([s2.style.rank, s2.style.bar, s2.style.frame], [2, 'royal', 'corners']);
+  await bulk(rk, '2027-03-01', 60, 180); // a huge season: Champion
+  assert.equal((await call(rk, 'get_rewards')).rank, 6);
+  await setNow('2027-05-23T23:00:00Z'); // Mon 24 May: season 3
+  const s3 = await call(rk, 'get_rewards');
+  assert.deepEqual([s3.season, s3.carried_min, s3.rank, s3.peak], [3, 6000, 4, 6]); // kept 100 h at most: Platinum
+  await call(rk, 'set_style', { p_frame: 'champion' });
+  await fails(call(khov, 'update_settings', { p_patch: { season_keep_pct: 101 } }), /between 0 and 100/);
+  await fails(call(khov, 'update_settings', { p_patch: { season_keep_max: -1 } }), /between 0 and 1000/);
+  await call(khov, 'update_settings', { p_patch: { season_keep_pct: 25 } });
+  assert.equal((await call(rk, 'get_rewards')).keep_pct, 25);
+  await call(khov, 'update_settings', { p_patch: { season_keep_pct: 50 } });
+});
+
 console.log(`\n${passed} checks passed${process.exitCode ? ', with failures above' : ''}.`);

@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { proofUrl } from './api.js';
+import { TIERS, emblemURL } from './rank.js';
 
 // ---- tiny hash router: #/log, #/goals, #/group, #/member/<id>, #/kitty, #/more
-const KNOWN = ['log', 'goals', 'leave', 'group', 'member', 'kitty', 'disputes', 'dispute', 'more'];
+const KNOWN = ['log', 'goals', 'leave', 'group', 'member', 'kitty', 'disputes', 'dispute', 'rewards', 'more'];
 function parseHash() {
   const parts = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   return KNOWN.includes(parts[0]) ? parts : ['log'];
@@ -103,8 +104,16 @@ export function Tick({ children, warn }) {
   );
 }
 
-// A member's profile picture, or their initial when they have none.
-export function Avatar({ path, name = '', size = 40 }) {
+// A rank's shield, sized for a line of text.
+export function RankIcon({ rank, size = 20 }) {
+  if (rank === null || rank === undefined) return null;
+  const t = TIERS[rank] || TIERS[0];
+  return <img className="rank-icon" src={emblemURL(rank, size * 2)} width={size} height={size} alt={t.name} title={t.name} />;
+}
+
+// A member's profile picture, or their initial when they have none. With a rank,
+// it gets a ring in the rank's colour.
+export function Avatar({ path, name = '', size = 40, rank = null }) {
   const [url, setUrl] = useState('');
   useEffect(() => {
     setUrl('');
@@ -115,7 +124,10 @@ export function Avatar({ path, name = '', size = 40 }) {
   }, [path]);
   const initial = String(name).trim().charAt(0).toUpperCase() || '?';
   return (
-    <span className="avatar" aria-hidden="true" style={{ width: size, height: size, fontSize: Math.round(size * 0.42) }}>
+    <span className="avatar" aria-hidden="true" style={{
+      width: size, height: size, fontSize: Math.round(size * 0.42),
+      boxShadow: rank === null || rank === undefined ? undefined : `0 0 0 2px var(--surface), 0 0 0 ${size >= 56 ? 5 : 4}px ${(TIERS[rank] || TIERS[0]).ring}`,
+    }}>
       {url ? <img src={url} alt="" /> : initial}
     </span>
   );

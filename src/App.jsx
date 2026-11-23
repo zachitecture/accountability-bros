@@ -9,6 +9,7 @@ import Member from './screens/Member.jsx';
 import Kitty from './screens/Kitty.jsx';
 import More from './screens/More.jsx';
 import Leave from './screens/Leave.jsx';
+import Rewards from './screens/Rewards.jsx';
 import { Dispute, DisputeNew, Disputes } from './screens/Disputes.jsx';
 
 const TABS = [
@@ -102,6 +103,7 @@ export default function App() {
   const [page, a, b] = route;
   let screen;
   if (page === 'leave') screen = <Leave />;
+  else if (page === 'rewards') screen = <Rewards key={state.me.avatar_path || ''} state={state} />;
   else if (page === 'disputes') screen = <Disputes state={state} />;
   else if (page === 'dispute' && a === 'new' && b) screen = <DisputeNew key={`${b}-${route[3] || ''}`} kind={b} target={route[3] || null} />;
   else if (page === 'dispute' && a) screen = <Dispute key={a} state={state} id={a} />;
@@ -112,6 +114,6 @@ export default function App() {
   else if (page === 'more') screen = <More state={state} email={session.user.email} onState={setState} refresh={refresh} />;
   else screen = <Log state={state} refresh={refresh} />;
 
-  const active = page === 'member' ? 'group' : page === 'leave' ? 'goals' : page === 'disputes' || page === 'dispute' ? 'kitty' : page;
+  const active = page === 'member' ? 'group' : page === 'leave' ? 'goals' : page === 'disputes' || page === 'dispute' ? 'kitty' : page === 'rewards' ? 'more' : page;
   return <Shell tabs active={active}><Catch key={route.join('/')}>{screen}</Catch></Shell>;
 }
