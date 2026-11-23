@@ -42,6 +42,20 @@ export async function compressPhoto(file, maxSide = 1440) {
   return toJpeg(canvas, 0.8);
 }
 
+// Mirror a photo left to right. Phones show a selfie mirrored while you take it but
+// usually save it the other way round, so selfies are mirrored back to match what you saw.
+export async function mirrorPhoto(blob) {
+  const img = await loadImage(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(img, 0, 0);
+  return toJpeg(canvas, 0.9);
+}
+
 // Profile pictures: cut to a square from the middle of the photo, 512px across.
 export async function squarePhoto(file, side = 512) {
   const img = await loadImage(file);

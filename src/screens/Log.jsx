@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { rpc, uploadProof } from '../api.js';
-import { compressPhoto, makeStamp } from '../image.js';
+import { compressPhoto, makeStamp, mirrorPhoto } from '../image.js';
 import { CATEGORY_LABEL, fmtDate, fmtDayTime, fmtDuration } from '../format.js';
 import { ErrorNote, Head, Icon, Loading, Tick, avatarBlob, useLoad } from '../ui.jsx';
 import { TIERS } from '../rank.js';
@@ -79,12 +79,24 @@ export default function Log({ state }) {
     setError('');
     setBusy('Preparing selfie…');
     try {
-      const blob = await compressPhoto(file, 900);
+      // Mirrored to match the camera preview, which is what people expect to see.
+      const blob = await mirrorPhoto(await compressPhoto(file, 900));
       setSelfie({ blob, url: URL.createObjectURL(blob) });
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy('');
+    }
+  }
+
+  // For phones that already save selfies mirrored: flip it back.
+  async function flipSelfie() {
+    setError('');
+    try {
+      const blob = await mirrorPhoto(selfie.blob);
+      setSelfie({ blob, url: URL.createObjectURL(blob) });
+    } catch (err) {
+      setError(err.message);
     }
   }
 
@@ -360,9 +372,12 @@ export default function Log({ state }) {
             <img className="thumb" src={selfie.url} alt="Your selfie" />
             <div className="stack grow" style={{ gap: 3 }}>
               <span className="name" style={{ fontSize: 15 }}>Selfie added</span>
-              <span className="sub">It sits in the corner of your stamp.</span>
+              <span className="sub">This is how it goes on your stamp. Wrong way round? Tap Flip.</span>
             </div>
-            <button type="button" className="btn small-btn" onClick={() => setSelfie(null)}>Remove</button>
+            <div className="stack" style={{ gap: 6 }}>
+              <button type="button" className="btn small-btn" onClick={flipSelfie}>Flip</button>
+              <button type="button" className="btn small-btn" onClick={() => setSelfie(null)}>Remove</button>
+            </div>
           </div>
         ) : (
           <button type="button" className="btn dashed" onClick={() => selfieRef.current.click()}>

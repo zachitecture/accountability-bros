@@ -255,6 +255,30 @@ try {
   await page.getByText('Photo added').waitFor();
   await page.setInputFiles('input[aria-label="Take a selfie"]', selfiePath);
   await page.getByText('Selfie added').waitFor();
+  // The selfie is mirrored to match the camera preview; Flip turns it back.
+  // Compare the average colour of a block near the bottom-left with the same block read right to left.
+  const blocks = (src) => page.evaluate(async (u) => {
+    const i = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = u; });
+    const c = document.createElement('canvas'); c.width = i.naturalWidth; c.height = i.naturalHeight;
+    const x = c.getContext('2d'); x.drawImage(i, 0, 0);
+    const b = Math.round(c.width * 0.06);
+    const mean = (left) => { const d = x.getImageData(left, Math.round(c.height * 0.82), b, b).data; let s = 0; for (let k = 0; k < d.length; k += 4) s += d[k] + d[k + 1] + d[k + 2]; return s / (d.length / 4); };
+    const at = Math.round(c.width * 0.3);
+    return { left: mean(at), right: mean(c.width - at - b) };
+  }, src);
+  const original = await blocks(`data:image/jpeg;base64,${readFileSync(selfiePath).toString('base64')}`);
+  const mirrored = await blocks(await page.locator('img[alt="Your selfie"]').getAttribute('src'));
+  const mirroredSrc = await page.locator('img[alt="Your selfie"]').getAttribute('src');
+  await page.getByRole('button', { name: 'Flip', exact: true }).click();
+  await page.waitForFunction((old) => document.querySelector('img[alt="Your selfie"]').src !== old, mirroredSrc);
+  const flippedSrc = await page.locator('img[alt="Your selfie"]').getAttribute('src');
+  const flipped = await blocks(flippedSrc);
+  const info = JSON.stringify({ original, mirrored, flipped });
+  assert.ok(Math.abs(original.left - original.right) > 25, `the test selfie should not be symmetric ${info}`);
+  assert.ok(Math.abs(mirrored.left - original.right) < 25, `mirrored selfie reads right to left ${info}`);
+  assert.ok(Math.abs(flipped.left - original.left) < 25, `Flip turns it back ${info}`);
+  await page.getByRole('button', { name: 'Flip', exact: true }).click(); // back to mirrored, as the camera showed it
+  await page.waitForFunction((old) => document.querySelector('img[alt="Your selfie"]').src !== old, flippedSrc);
   await page.getByLabel('Note (optional, only you see it)').fill('Bench 80 kg x 5');
   await shot(page, 'log');
   await page.getByRole('button', { name: /Stamp it/ }).click();
